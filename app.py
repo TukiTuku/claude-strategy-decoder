@@ -291,77 +291,100 @@ def analyze_strategy_with_claude(theme: str, markets: dict, trades: list) -> str
     if not os.environ.get("ANTHROPIC_API_KEY"):
         return "⚠️ Set ANTHROPIC_API_KEY to enable AI analysis."
 
-    # Build per-market position summary
-    markets_summary = []
-    for mid, m in markets.items():
-        markets_summary.append({
-            "title": m["title"],
-            "outcome": m["outcome"],
-            "avg_entry_price": round(m["avgPrice"], 4),
-            "shares": round(m["size"], 2),
-            "total_invested": round(m["initialValue"], 2) if m.get("initialValue") else round(m["size"] * m["avgPrice"], 2),
-            "current_value": round(m["currentValue"], 2),
-            "profit_loss": round(m["profit"], 2),
-            "roi_pct": round(m.get("roiPct", 0), 1),
-            "closed": m["closed"],
-            "end_date": m["endDate"],
+    # ── 1. Pre-calculate per-market payouts ──
+    # Each Polymarket share pays $1 on resolution.
+    #   win_pnl  = shares × (1 − avg_price)   [net profit if position resolves in its favour]
+    #   loss_pnl = −(shares × avg_price)       [net loss if position resolves against it]
+    market_rows = []
+    for i, m in enumerate(markets.values()):
+        shares    = float(m["size"])
+        avg_price = float(m["avgPrice"])
+        outcome   = m.get("outcome", "YES")
+        title     = m.get("title", "")
+        win_pnl   = round(shares * (1 - avg_price), 2)
+        loss_pnl  = round(-(shares * avg_price), 2)
+        market_rows.append({
+            "idx": i,
+            "title": title, "outcome": outcome,
+            "shares": round(shares, 2), "avg_price": round(avg_price, 4),
+            "invested": round(m.get("initialValue") or shares * avg_price, 2),
+            "current_value": round(float(m.get("currentValue", 0)), 2),
+            "win_pnl": win_pnl, "loss_pnl": loss_pnl,
         })
 
-    # Build compact trade log grouped by market
-    trades_by_market: dict = defaultdict(list)
-    for t in trades:
-        key = f"{t['title']} [{t['outcome']}]" if t.get("outcome") else t["title"]
-        trades_by_market[key].append(t)
+    # ── 2. Ask Claude for correlated scenario analysis + strategy label ──
+    markets_for_prompt = [
+        {"idx": r["idx"], "title": r["title"], "outcome": r["outcome"],
+         "win_pnl": r["win_pnl"], "loss_pnl": r["loss_pnl"]}
+        for r in market_rows
+    ]
+    prompt = f"""Eres un analista experto de Polymarket. Responde en español.
 
-    trade_log_lines = []
-    for market_key, mtrades in trades_by_market.items():
-        trade_log_lines.append(f"\n  {market_key}:")
-        for t in mtrades:
-            dt = datetime.utcfromtimestamp(t["timestamp"]).strftime("%Y-%m-%d") if t.get("timestamp") else "?"
-            trade_log_lines.append(f"    {dt} {t['side']:4s} {t['size']:8.2f} shares @ {t['price']:.4f}")
+TEMA: "{theme}"
+POSICIONES (idx = índice para referenciar):
+{json.dumps(markets_for_prompt, ensure_ascii=False, indent=2)}
 
-    trade_log = "\n".join(trade_log_lines) if trade_log_lines else "  (no individual trade data available)"
+Estas posiciones pueden estar correlacionadas: mismo evento subyacente con distintas fechas límite u outcomes opuestos.
+Identifica los 2-3 escenarios reales más relevantes. NO incluyas el escenario imposible "todas ganan" ni "todas pierden" si las posiciones están correlacionadas.
+Para cada escenario indica qué mercados (por idx) ganan y cuáles pierden según su posición.
 
-    prompt = f"""Responde siempre en español.
-
-You are an expert Polymarket analyst reverse-engineering a wallet's trading strategy.
-
-THEME: "{theme}"
-TOTAL TRADES: {len(trades)}
-
-━━━ POSITION SUMMARY ━━━
-{json.dumps(markets_summary, indent=2)}
-
-━━━ TRADE-BY-TRADE LOG (chronological) ━━━
-{trade_log}
-
-━━━ IMPORTANT: HOW POLYMARKET ORDER FILLS WORK ━━━
-A single limit order placed by a user can be filled by MANY counterparties in small fragments.
-This means you may see dozens or hundreds of consecutive trades at the exact same price (or
-within 0.001) in the same market — these all represent ONE strategic decision by the user,
-not multiple separate orders, not automation, not scalping. Only consider it a new strategic
-decision when the price changes significantly or there is a clear time gap. Do NOT label a
-position as "scalping" or "automated" solely because of multiple fills at the same price.
-
-━━━ ANALYSIS TASK ━━━
-Write exactly 3 short paragraphs, no titles, no bold, no bullet points. Total: 150 words max.
-Use the same language as the market titles.
-
-Paragraph 1: What strategy is this? (directional / accumulation / market-making / hedging / diversified coverage)
-Cite ONE concrete piece of evidence — only mention a price or size if it's the only way to make the point.
-
-Paragraph 2: What outcome is this wallet betting on? Is the goal resolution or active trading?
-
-Paragraph 3: One sentence — does this strategy show real edge or not, and why?
-
-No preamble, no summary, no generic observations. Be direct."""
+Responde ÚNICAMENTE con este JSON (sin markdown, sin texto extra):
+{{
+  "strategy": "3-5 palabras clasificando la estrategia",
+  "edge": "una frase sobre la ventaja real",
+  "scenarios": [
+    {{
+      "name": "nombre corto del escenario",
+      "description": "qué ocurre en este escenario",
+      "wins": [lista de idx que ganan],
+      "losses": [lista de idx que pierden]
+    }}
+  ]
+}}"""
 
     message = client.messages.create(
         model="claude-sonnet-4-6",
-        max_tokens=300,
+        max_tokens=600,
         messages=[{"role": "user", "content": prompt}]
     )
-    return message.content[0].text
+    raw = message.content[0].text.strip()
+
+    # ── 3. Parse JSON and compute net P&L per scenario in Python ──
+    try:
+        data = json.loads(raw)
+        strategy_line = f"Estrategia: {data['strategy']}"
+        edge_line     = f"Edge: {data['edge']}"
+
+        scenario_lines = ["ESCENARIOS:"]
+        for sc in data["scenarios"]:
+            net_pnl = (sum(market_rows[i]["win_pnl"]  for i in sc["wins"])
+                     + sum(market_rows[i]["loss_pnl"] for i in sc["losses"]))
+            net_pnl = round(net_pnl, 2)
+            sign = "+" if net_pnl >= 0 else ""
+            scenario_lines.append(f'\n📌 {sc["name"]}')
+            scenario_lines.append(f'   {sc["description"]}')
+            for i in sc["wins"]:
+                r = market_rows[i]
+                scenario_lines.append(f'   ✅ {r["title"]} [{r["outcome"]}]: +${r["win_pnl"]:,.2f}')
+            for i in sc["losses"]:
+                r = market_rows[i]
+                scenario_lines.append(f'   ❌ {r["title"]} [{r["outcome"]}]: ${r["loss_pnl"]:,.2f}')
+            scenario_lines.append(f'   → P&L neto: {sign}${net_pnl:,.2f}')
+
+        scenario_block = "\n".join(scenario_lines)
+        return f"{strategy_line}\n{edge_line}\n\n{scenario_block}"
+
+    except (json.JSONDecodeError, KeyError, IndexError):
+        # ── Fallback: simple per-market table if JSON parse fails ──
+        scenario_lines = ["ESCENARIOS:"]
+        for r in market_rows:
+            outcome    = r["outcome"].upper()
+            win_event  = "el evento SÍ ocurre" if outcome != "NO" else "el evento NO ocurre"
+            lose_event = "el evento NO ocurre" if outcome != "NO" else "el evento SÍ ocurre"
+            scenario_lines.append(f'\n- "{r["title"]}" [{outcome}]')
+            scenario_lines.append(f'  Si {win_event}:  GANA  +${r["win_pnl"]:,.2f}')
+            scenario_lines.append(f'  Si {lose_event}: PIERDE ${r["loss_pnl"]:,.2f}')
+        return f"{raw}\n\n" + "\n".join(scenario_lines)
 
 
 def compute_roi(markets: dict) -> dict:

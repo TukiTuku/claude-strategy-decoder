@@ -359,7 +359,7 @@ function buildThemeCard(theme, markets, tab, idx) {
       </div>
 
       <div class="markets-grid" id="markets-grid-${idx}">
-        ${markets.map(m => buildMarketCard(m, idx, tab)).join('')}
+        ${buildMarketsGridHtml(markets, idx, tab)}
       </div>
 
       <div class="roi-strip">
@@ -419,7 +419,7 @@ function buildMarketCard(market, themeIdx, tab) {
         <input type="checkbox" class="market-checkbox" data-condition-id="${condId}" checked>
       </label>
       <div class="market-title">${escHtml(market.title)}</div>
-      <div class="market-outcome">${escHtml(market.outcome || 'YES')}</div>
+      <div class="market-outcome ${(market.outcome || 'YES').toUpperCase() === 'YES' ? 'css-yes' : 'css-no'}">${escHtml(market.outcome || 'YES')}</div>
       <div class="market-stats">
         <div class="mstat">
           <span class="mstat-val">${price}%</span>
@@ -447,10 +447,83 @@ function buildMarketCard(market, themeIdx, tab) {
   `;
 }
 
+// ---- SUBCATEGORY GROUPING ----
+const MONTH_RE = 'jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?';
+
+// Strips ONLY a trailing date phrase at the very end of the title.
+// Handles: "by March 31", "by March 31, 2025", "by end of March", "by end of March 2025"
+function canonicalizeTitle(title) {
+  if (!title) return '';
+  let s = title.trim();
+  // "by/before [opt: end of / the end of] [Month] [opt: Day[suffix]][opt: , 20YY] [opt: ?]"
+  s = s.replace(
+    new RegExp(
+      `\\s+(?:by|before)\\s+(?:(?:the\\s+)?end\\s+of\\s+)?` +
+      `(?:${MONTH_RE})` +
+      `(?:\\s+(?:\\d{1,2}(?:st|nd|rd|th)?(?:,?\\s*20\\d{2})?|20\\d{2}))?` +
+      `\\s*\\??\\s*$`,
+      'i'
+    ),
+    ''
+  );
+  s = s.replace(/\s*\?\s*$/, '').trim();
+  return (s.length >= 4 ? s : title.trim()).toLowerCase();
+}
+
+function buildMarketsGridHtml(markets, themeIdx, tab) {
+  const groupMap = new Map();
+  markets.forEach(m => {
+    let key;
+    try {
+      key = canonicalizeTitle(m.title);
+    } catch (e) {
+      console.error('[subcategory] error en canonicalizeTitle para:', m.title, e);
+      key = (m.title || '').toLowerCase();
+    }
+    console.log('[subcategory]', JSON.stringify(m.title), '->', JSON.stringify(key));
+    if (!groupMap.has(key)) groupMap.set(key, []);
+    groupMap.get(key).push(m);
+  });
+
+  const hasGroupsWithMultiple = [...groupMap.values()].some(g => g.length >= 2);
+
+  // Paso 1: construir HTML de subgrupos (grupos con 2+ mercados)
+  let subgroupsHtml = '';
+  // Paso 2: construir HTML de tarjetas individuales (grupos con 1 mercado)
+  let standaloneHtml = '';
+
+  groupMap.forEach((groupMarkets, key) => {
+    if (hasGroupsWithMultiple && groupMarkets.length >= 2) {
+      let label = key.replace(/^will\s+/i, '').trim();
+      label = label.replace(/\b\w/g, c => c.toUpperCase());
+      const cardsHtml = groupMarkets.map(m => buildMarketCard(m, themeIdx, tab)).join('');
+      subgroupsHtml +=
+        '<div class="subgroup-wrapper">' +
+          '<div class="subgroup-header" onclick="toggleSubgroup(this)">' +
+            '<span class="subgroup-title">' + escHtml(label) + '</span>' +
+            '<span class="subgroup-count">' + groupMarkets.length + ' mercados</span>' +
+            '<span class="subgroup-chevron">\u25be</span>' +
+          '</div>' +
+          '<div class="subgroup-body">' + cardsHtml + '</div>' +
+        '</div>';
+    } else {
+      standaloneHtml += groupMarkets.map(m => buildMarketCard(m, themeIdx, tab)).join('');
+    }
+  });
+
+  // Los subgrupos van primero; las tarjetas individuales después, completamente separadas.
+  return subgroupsHtml + standaloneHtml;
+}
+
 // ---- TOGGLE CARD ----
 function toggleCard(idx) {
   const card = $(`theme-${idx}`);
   card.classList.toggle('open');
+}
+
+// ---- SUBGROUP TOGGLE ----
+function toggleSubgroup(header) {
+  header.closest('.subgroup-wrapper').classList.toggle('open');
 }
 
 // ---- MARKET SELECTION TOGGLE ----
@@ -709,10 +782,10 @@ function mdToHtml(text) {
   s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
   // *italic*
   s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  // Blank lines → paragraph breaks
+  // Blank lines → paragraph break with spacing
   s = s.replace(/\n\n+/g, '<br><br>');
-  // Single newlines → space (avoid orphan line breaks mid-paragraph)
-  s = s.replace(/\n/g, ' ');
+  // Single newlines → line break (preserves scenario table lines)
+  s = s.replace(/\n/g, '<br>');
   return s;
 }
 
