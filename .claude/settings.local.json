@@ -1,0 +1,20 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5000/)",
+      "Bash(curl -s -X POST http://localhost:5000/api/analyze -H \"Content-Type: application/json\" -d '{\"\"\"\"wallet\"\"\"\":\"\"\"\"0x27967bf928ce82c29cf34389ba34c5759c8cb4f0\"\"\"\"}')",
+      "Bash(python -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(''''activePositions:'''', d.get\\(''''activePositions''''\\)\\); print\\(''''closedPositions:'''', d.get\\(''''closedPositions''''\\)\\); print\\(''''totalTrades:'''', d.get\\(''''totalTrades''''\\)\\); themes=d.get\\(''''themes'''',[]\\); print\\(''''themes:'''', len\\(themes\\)\\); [print\\(f''''  {t[\"\"theme\"\"]}: {len\\(t[\"\"activeMarkets\"\"]\\)} active, {len\\(t[\"\"closedMarkets\"\"]\\)} closed''''\\) for t in themes[:8]]\")",
+      "Bash(curl -s \"https://data-api.polymarket.com/trades?user=0x27967bf928ce82c29cf34389ba34c5759c8cb4f0&limit=20\")",
+      "Bash(python -c \":*)",
+      "Bash(curl -s \"https://clob.polymarket.com/markets/0xe99cc59f32b10d23acf196d1a0e8264ea30fca198428acadd3464b06ff60e771\")",
+      "Bash(cd /tmp)",
+      "Bash(curl -s \"https://data-api.polymarket.com/trades?user=0x27967bf928ce82c29cf34389ba34c5759c8cb4f0&limit=500&offset=0\" -o t0.json)",
+      "Bash(curl -s \"https://data-api.polymarket.com/trades?user=0x27967bf928ce82c29cf34389ba34c5759c8cb4f0&limit=500&offset=500\" -o t500.json)",
+      "Bash(python:*)",
+      "Bash(pip install:*)",
+      "Bash(curl -s http://localhost:5000/)",
+      "Bash(taskkill:*)",
+      "Bash(powershell -Command \"Stop-Process -Name python -Force -ErrorAction SilentlyContinue; Write-Host 'Killed'\")"
+    ]
+  }
+}

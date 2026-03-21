@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Strategy Decoder · Polymarket Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Syne:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header class="header">
+    <div class="header-inner">
+      <div class="logo">
+        <span class="logo-icon">⬡</span>
+        <span class="logo-text">Strategy<span class="logo-accent">Decoder</span></span>
+      </div>
+      <div class="header-sub">Polymarket Wallet Intelligence</div>
+    </div>
+  </header>
+
+  <!-- HERO / SEARCH -->
+  <section class="hero">
+    <div class="hero-grid-bg"></div>
+    <div class="hero-content">
+      <h1 class="hero-title">Decode any<br><span class="gradient-text">Polymarket wallet</span></h1>
+      <p class="hero-desc">Groups positions by theme · AI strategy analysis · ROI tracking · Price charts</p>
+
+      <div class="search-box">
+        <input
+          type="text"
+          id="walletInput"
+          class="wallet-input"
+          placeholder="0x... Polymarket wallet address"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button class="btn-analyze" id="analyzeBtn" onclick="startAnalysis()">
+          <span class="btn-text">Analyze</span>
+          <span class="btn-icon">→</span>
+        </button>
+      </div>
+
+      <div class="example-wallets">
+        <span class="ex-label">Try:</span>
+        <button class="ex-wallet" onclick="setWallet('0x8a4e2d3f9c1b5e7a0d6c4f2e8b1a3d5c7e9f2b4a')">Example Whale</button>
+        <button class="ex-wallet" onclick="setWallet('0x1234567890abcdef1234567890abcdef12345678')">Demo Trader</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- LOADING STATE -->
+  <div id="loadingState" class="loading-state hidden">
+    <div class="loading-inner">
+      <div class="spinner"></div>
+      <div class="loading-steps">
+        <div class="load-step active" id="ls1">⬡ Fetching trades & positions...</div>
+        <div class="load-step" id="ls2">⬡ Grouping by theme...</div>
+        <div class="load-step" id="ls3">⬡ Computing ROI...</div>
+        <div class="load-step" id="ls4">⬡ Preparing charts...</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ERROR STATE -->
+  <div id="errorState" class="error-state hidden">
+    <div class="error-inner">
+      <span class="error-icon">⚠</span>
+      <p id="errorMsg">Something went wrong.</p>
+      <button class="btn-retry" onclick="resetUI()">Try Again</button>
+    </div>
+  </div>
+
+  <!-- RESULTS -->
+  <div id="resultsSection" class="results-section hidden">
+
+    <!-- WALLET SUMMARY BAR -->
+    <div class="summary-bar">
+      <div class="summary-wallet" id="summaryWallet"></div>
+      <div class="summary-stats">
+        <div class="stat-pill">
+          <span class="stat-val" id="statActive">—</span>
+          <span class="stat-lbl">Active</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-val" id="statClosed">—</span>
+          <span class="stat-lbl">Closed</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-val" id="statTrades">—</span>
+          <span class="stat-lbl">Trades</span>
+        </div>
+        <div class="stat-pill">
+          <span class="stat-val" id="statThemes">—</span>
+          <span class="stat-lbl">Themes</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- TABS -->
+    <div class="tabs-bar">
+      <button class="tab-btn active" onclick="switchTab('active', this)">Active Positions</button>
+      <button class="tab-btn" onclick="switchTab('closed', this)">History & ROI</button>
+    </div>
+
+    <!-- THEMES CONTAINER -->
+    <div id="themesContainer" class="themes-container"></div>
+
+  </div>
+
+  <!-- MARKET DETAIL MODAL -->
+  <div id="marketModal" class="modal-overlay hidden" onclick="closeModal(event)">
+    <div class="modal-box">
+      <button class="modal-close" onclick="closeModalDirect()">✕</button>
+      <div id="modalContent"></div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

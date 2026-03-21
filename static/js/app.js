@@ -1,0 +1,697 @@
+// ============================================
+// STRATEGY DECODER — Frontend App Logic
+// ============================================
+
+// ---- THEME ----
+function applyTheme(light) {
+  document.body.classList.toggle('light-mode', light);
+  const btn = document.getElementById('themeToggle');
+  if (btn) btn.textContent = light ? '☾' : '☀';
+}
+function toggleTheme() {
+  const isLight = document.body.classList.toggle('light-mode');
+  localStorage.setItem('sdTheme', isLight ? 'light' : 'dark');
+  const btn = document.getElementById('themeToggle');
+  if (btn) btn.textContent = isLight ? '☾' : '☀';
+}
+// Apply saved preference immediately
+applyTheme(localStorage.getItem('sdTheme') === 'light');
+
+let currentData = null;
+let currentTab = 'active';
+let currentSort = 'default';
+let pnlFilter = 'all';
+let chartInstances = {};
+
+// ---- UI HELPERS ----
+function $(id) { return document.getElementById(id); }
+
+function showOnly(section) {
+  ['loadingState', 'errorState', 'resultsSection'].forEach(id => {
+    $(id).classList.add('hidden');
+  });
+  if (section) $(section).classList.remove('hidden');
+}
+
+
+function resetUI() {
+  showOnly(null);
+  $('walletInput').value = '';
+  currentData = null;
+}
+
+// ---- LOADING STEPS ----
+let loadStep = 0;
+function advanceLoadStep() {
+  if (loadStep > 0) {
+    const prev = $('ls' + loadStep);
+    if (prev) { prev.classList.remove('active'); prev.classList.add('done'); }
+  }
+  loadStep++;
+  const curr = $('ls' + loadStep);
+  if (curr) curr.classList.add('active');
+}
+
+// ---- MAIN ANALYSIS ----
+async function startAnalysis() {
+  const wallet = $('walletInput').value.trim();
+  if (!wallet) {
+    $('walletInput').focus();
+    return;
+  }
+
+  // Reiniciar pasos de carga
+  loadStep = 0;
+  ['ls1','ls2','ls3','ls4'].forEach(id => {
+    const el = $(id);
+    if (el) { el.classList.remove('active', 'done'); }
+  });
+
+  showOnly('loadingState');
+  advanceLoadStep();
+
+  const btn = $('analyzeBtn');
+  btn.classList.add('loading');
+  btn.querySelector('.btn-text').textContent = 'Analizando...';
+
+  try {
+    const response = await fetch('/api/analyze', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wallet })
+    });
+
+    advanceLoadStep(); // paso 2 — agrupación
+
+    if (!response.ok) {
+      const err = await response.json();
+      throw new Error(err.error || 'Error del servidor');
+    }
+
+    const data = await response.json();
+    currentData = data;
+
+    advanceLoadStep(); // paso 3 — ROI
+    await sleep(300);
+    advanceLoadStep(); // paso 4 — gráficos
+    await sleep(300);
+
+    showOnly('resultsSection');
+    renderResults(data);
+
+  } catch (err) {
+    $('errorMsg').textContent = err.message;
+    showOnly('errorState');
+  } finally {
+    btn.classList.remove('loading');
+    btn.querySelector('.btn-text').textContent = 'Analizar';
+  }
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ---- RENDER RESULTS ----
+function renderResults(data) {
+  $('summaryWallet').textContent = data.wallet;
+  $('statActive').textContent = data.activePositions ?? '—';
+  $('statClosed').textContent = data.closedPositions ?? '—';
+  $('statTrades').textContent = data.totalTrades ?? '—';
+  $('statThemes').textContent = data.themes?.length ?? '—';
+
+  // Reset PNL filter to "Todo" on new analysis
+  pnlFilter = 'all';
+  document.querySelectorAll('.pnl-filter-btn').forEach(b => b.classList.remove('active'));
+  const todoBtn = document.querySelector('.pnl-filter-btn:last-child');
+  if (todoBtn) todoBtn.classList.add('active');
+
+  renderThemes(data.themes, currentTab);
+  setTimeout(() => renderPnlChart(data.themes), 50);
+}
+
+// ---- PNL CHART ----
+
+// Returns sorted daily P&L deltas (not cumulative) so filters can re-cumulate from 0
+function buildPnlDeltas(themes) {
+  const byDay = {};
+  themes.forEach(t => {
+    (t.closedMarkets || []).forEach(m => {
+      if (!m.lastTradeDate) return;
+      const day = new Date(m.lastTradeDate * 1000).toISOString().slice(0, 10);
+      byDay[day] = (byDay[day] || 0) + (m.profit ?? 0);
+    });
+  });
+  return Object.keys(byDay).sort().map(day => ({ day, delta: byDay[day] }));
+}
+
+function setPnlFilter(filter, btn) {
+  pnlFilter = filter;
+  document.querySelectorAll('.pnl-filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (currentData) renderPnlChart(currentData.themes);
+}
+
+function renderPnlChart(themes) {
+  const allDeltas = buildPnlDeltas(themes);
+  const section = $('pnlChartSection');
+  if (!allDeltas.length) { section.classList.add('hidden'); return; }
+  section.classList.remove('hidden');
+
+  // Filter daily deltas to the selected period
+  let filtered = allDeltas;
+  if (pnlFilter !== 'all') {
+    const days = pnlFilter === '7d' ? 7 : pnlFilter === '14d' ? 14 : 30;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    filtered = allDeltas.filter(p => p.day >= cutoffStr);
+  }
+
+  // Accumulate from 0 within the filtered period
+  let running = 0;
+  const points = filtered.map(p => {
+    running += p.delta;
+    return { day: p.day, value: parseFloat(running.toFixed(2)) };
+  });
+
+  const finalValue = points.length ? points[points.length - 1].value : 0;
+  const isPositive = finalValue >= 0;
+  const lineColor  = isPositive ? '#00cc88' : '#ff4444';
+  const bgColor    = isPositive ? 'rgba(0,204,136,0.08)' : 'rgba(255,68,68,0.08)';
+  const totalSign  = finalValue > 0 ? '+' : finalValue < 0 ? '-' : '';
+
+  const totalEl = $('pnlTotalValue');
+  totalEl.textContent = `${totalSign}$${Math.abs(finalValue).toFixed(2)}`;
+  totalEl.className = `pnl-total-val ${isPositive ? 'pnl-positive' : 'pnl-negative'}`;
+
+  const labels = points.map(p =>
+    new Date(p.day + 'T12:00:00').toLocaleDateString('es-ES', { month: 'short', day: 'numeric' })
+  );
+  const values = points.map(p => p.value);
+
+  if (chartInstances['pnl']) { chartInstances['pnl'].destroy(); delete chartInstances['pnl']; }
+
+  chartInstances['pnl'] = new Chart($('pnlChart'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        borderColor: lineColor,
+        backgroundColor: bgColor,
+        borderWidth: 2,
+        fill: true,
+        tension: 0.3,
+        pointRadius: points.length > 40 ? 0 : 3,
+        pointHoverRadius: 5,
+        pointBackgroundColor: lineColor,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const v = ctx.raw;
+              return ` ${v >= 0 ? '+' : ''}$${v.toFixed(2)}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: '#5a7a9a', font: { family: 'Space Mono', size: 10 }, maxTicksLimit: 8 },
+          grid: { color: '#1e2d3d' }
+        },
+        y: {
+          ticks: {
+            color: '#5a7a9a',
+            font: { family: 'Space Mono', size: 10 },
+            callback: v => `$${v.toFixed(0)}`
+          },
+          grid: { color: '#1e2d3d' }
+        }
+      }
+    }
+  });
+}
+
+function switchTab(tab, btn) {
+  currentTab = tab;
+  currentSort = 'default';
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  if (currentData) renderThemes(currentData.themes, tab);
+}
+
+function setSortAndRender(sortBy) {
+  // Toggle: same key flips direction; new key starts desc
+  if (currentSort === sortBy + '-desc') {
+    currentSort = sortBy + '-asc';
+  } else {
+    currentSort = sortBy + '-desc';
+  }
+  if (currentData) renderThemes(currentData.themes, currentTab);
+}
+
+function renderThemes(themes, tab) {
+  const container = $('themesContainer');
+  container.innerHTML = '';
+
+  Object.values(chartInstances).forEach(c => c.destroy());
+  chartInstances = {};
+
+  const relevantThemes = themes.filter(t => {
+    const markets = tab === 'active' ? t.activeMarkets : t.closedMarkets;
+    return markets && markets.length > 0;
+  });
+
+  if (relevantThemes.length === 0) {
+    const label = tab === 'active' ? 'activas' : 'cerradas';
+    container.innerHTML = `<div class="empty-state">No se encontraron posiciones ${label} para esta wallet.</div>`;
+    return;
+  }
+
+  // Sort buttons (both tabs)
+  const roiActive = currentSort.startsWith('roi');
+  const pnlActive = currentSort.startsWith('pnl');
+  const roiArrow = currentSort === 'roi-asc' ? '↑' : '↓';
+  const pnlArrow = currentSort === 'pnl-asc' ? '↑' : '↓';
+  const sortBar = document.createElement('div');
+  sortBar.className = 'sort-bar';
+  sortBar.innerHTML = `
+    <span class="sort-label">Ordenar:</span>
+    <button class="sort-btn ${roiActive ? 'active' : ''}" onclick="setSortAndRender('roi')">ROI% ${roiArrow}</button>
+    <button class="sort-btn ${pnlActive ? 'active' : ''}" onclick="setSortAndRender('pnl')">G/P $ ${pnlArrow}</button>
+  `;
+  container.appendChild(sortBar);
+
+  // Apply sort
+  let sorted = [...relevantThemes];
+  if (currentSort === 'roi-desc') {
+    sorted.sort((a, b) => b.roi.roiPercent - a.roi.roiPercent);
+  } else if (currentSort === 'roi-asc') {
+    sorted.sort((a, b) => a.roi.roiPercent - b.roi.roiPercent);
+  } else if (currentSort === 'pnl-desc') {
+    sorted.sort((a, b) => b.roi.totalPnL - a.roi.totalPnL);
+  } else if (currentSort === 'pnl-asc') {
+    sorted.sort((a, b) => a.roi.totalPnL - b.roi.totalPnL);
+  }
+
+  sorted.forEach((theme, idx) => {
+    const markets = tab === 'active' ? theme.activeMarkets : theme.closedMarkets;
+    const card = buildThemeCard(theme, markets, tab, idx);
+    container.appendChild(card);
+  });
+}
+
+function buildThemeCard(theme, markets, tab, idx) {
+  const card = document.createElement('div');
+  card.className = 'theme-card';
+  card.id = `theme-${idx}`;
+
+  const roi = theme.roi;
+  const roiClass = roi.roiPercent > 0 ? 'roi-positive' : roi.roiPercent < 0 ? 'roi-negative' : 'roi-neutral';
+  const roiSign = roi.roiPercent > 0 ? '+' : roi.roiPercent < 0 ? '-' : '';
+  const pnlSign = roi.totalPnL > 0 ? '+' : roi.totalPnL < 0 ? '-' : '';
+  const badgeType = tab === 'active' ? 'badge-active' : 'badge-closed';
+  const badgeText = tab === 'active' ? `${markets.length} ACTIVAS` : `${markets.length} CERRADAS`;
+
+  card.innerHTML = `
+    <div class="theme-header" onclick="toggleCard(${idx})">
+      <div class="theme-title-row">
+        <span class="theme-name">${escHtml(theme.theme)}</span>
+        <span class="theme-badge ${badgeType}">${badgeText}</span>
+        ${theme.tradeCount > 0 ? `<span class="theme-badge badge-closed">${theme.tradeCount} OPERACIONES</span>` : ''}
+      </div>
+      <div class="theme-roi-row">
+        <div class="roi-box">
+          <span class="roi-pct ${roiClass}">${pnlSign}$${Math.abs(roi.totalPnL).toFixed(2)}</span>
+          <span class="roi-label">P&amp;L $</span>
+        </div>
+        <div class="roi-box">
+          <span class="roi-pct ${roiClass}">${roiSign}${Math.abs(roi.roiPercent)}%</span>
+          <span class="roi-label">ROI</span>
+        </div>
+        <span class="theme-chevron">▾</span>
+      </div>
+    </div>
+    <div class="theme-body">
+      <div class="ai-panel">
+        <div class="ai-panel-header">
+          <span class="ai-label">Análisis de Estrategia IA</span>
+          <button class="btn-ai-analyze" onclick="runAIAnalysis(this)" data-theme="${escHtml(theme.theme)}" data-analyzed="false">
+            Analizar
+          </button>
+        </div>
+        <div class="ai-content-${idx}">
+          <span style="font-family:var(--mono);font-size:12px;color:var(--text-dim)">
+            Haz clic en "Analizar" para obtener un desglose de la estrategia IA para esta temática.
+          </span>
+        </div>
+      </div>
+
+      <div class="markets-grid" id="markets-grid-${idx}">
+        ${markets.map(m => buildMarketCard(m, idx, tab)).join('')}
+      </div>
+
+      <div class="roi-strip">
+        <div class="roi-item">
+          <span class="roi-item-val" style="color:var(--text-dim)">$${roi.totalInvested.toFixed(2)}</span>
+          <span class="roi-item-lbl">Invertido</span>
+        </div>
+        <div class="roi-item">
+          <span class="roi-item-val" style="color:var(--accent2)">$${roi.totalCurrent.toFixed(2)}</span>
+          <span class="roi-item-lbl">Valor Actual</span>
+        </div>
+        <div class="roi-item">
+          <span class="roi-item-val ${roiClass}">${roiSign}$${Math.abs(roi.totalPnL).toFixed(2)}</span>
+          <span class="roi-item-lbl">G/P</span>
+        </div>
+        <div class="roi-item">
+          <span class="roi-item-val ${roiClass}">${roiSign}${Math.abs(roi.roiPercent)}%</span>
+          <span class="roi-item-lbl">ROI</span>
+        </div>
+      </div>
+    </div>
+  `;
+
+  return card;
+}
+
+function buildMarketCard(market, themeIdx, tab) {
+  const isHistory = tab === 'closed';
+  const pnl = market.profit ?? 0;
+  const pnlClass = pnl > 0 ? 'pnl-positive' : pnl < 0 ? 'pnl-negative' : '';
+  const pnlSign = pnl > 0 ? '+' : pnl < 0 ? '-' : '';
+  const price = (market.avgPrice * 100).toFixed(1);
+
+  // Línea de fecha
+  let dateLine;
+  if (isHistory) {
+    if (market.lastTradeDate) {
+      const d = new Date(market.lastTradeDate * 1000).toLocaleDateString('es-ES', { month:'short', day:'numeric', year:'numeric' });
+      dateLine = `📅 Última operación: ${d}`;
+    } else {
+      dateLine = '';
+    }
+  } else {
+    const d = market.endDate ? new Date(market.endDate).toLocaleDateString('es-ES', { month:'short', day:'numeric', year:'numeric' }) : '—';
+    dateLine = `🗓 Resuelve: ${d}`;
+  }
+
+  // 4.º stat: en historial muestra G/P$ + ROI%; en activas muestra Valor Actual
+  const roiPct = market.roiPct ?? 0;
+  const roiClass = roiPct > 0 ? 'pnl-positive' : roiPct < 0 ? 'pnl-negative' : '';
+  const roiSign = roiPct > 0 ? '+' : roiPct < 0 ? '-' : '';
+
+  return `
+    <div class="market-card" data-market="${escHtml(JSON.stringify(market))}" onclick="openMarketDetail(this.dataset.market)">
+      <div class="market-title">${escHtml(market.title)}</div>
+      <div class="market-outcome">${escHtml(market.outcome || 'YES')}</div>
+      <div class="market-stats">
+        <div class="mstat">
+          <span class="mstat-val">${price}%</span>
+          <span class="mstat-lbl">Precio Medio</span>
+        </div>
+        <div class="mstat">
+          <span class="mstat-val">${parseFloat(market.size || 0).toFixed(0)}</span>
+          <span class="mstat-lbl">Participaciones</span>
+        </div>
+        <div class="mstat">
+          <span class="mstat-val ${pnlClass}">${pnlSign}$${Math.abs(pnl).toFixed(2)}</span>
+          <span class="mstat-lbl">G/P</span>
+        </div>
+        <div class="mstat">
+          ${isHistory
+            ? `<span class="mstat-val ${roiClass}">${roiSign}${Math.abs(roiPct).toFixed(1)}%</span>
+               <span style="font-family:var(--mono);font-size:13px;font-weight:700;color:${roiPct > 0 ? 'var(--green)' : roiPct < 0 ? 'var(--red)' : 'var(--text-dim)'}">${roiSign}$${Math.abs(pnl).toFixed(2)}</span>`
+            : `<span class="mstat-val">$${parseFloat(market.currentValue || 0).toFixed(2)}</span>
+               <span class="mstat-lbl">Valor Actual</span>`
+          }
+        </div>
+      </div>
+      ${dateLine ? `<div class="market-end-date">${dateLine}</div>` : ''}
+    </div>
+  `;
+}
+
+// ---- TOGGLE CARD ----
+function toggleCard(idx) {
+  const card = $(`theme-${idx}`);
+  card.classList.toggle('open');
+}
+
+// ---- AI ANALYSIS ----
+async function runAIAnalysis(btn) {
+  if (btn.dataset.analyzed === 'true') return;
+
+  const themeName = btn.dataset.theme;
+  const theme = currentData.themes.find(t => t.theme === themeName);
+  if (!theme) return;
+
+  btn.textContent = 'Analizando...';
+  btn.disabled = true;
+
+  // Find the ai-content div inside the same theme-body as this button
+  const contentDiv = btn.closest('.theme-body').querySelector('[class^="ai-content-"]');
+  contentDiv.innerHTML = '<span class="ai-loading">Claude está analizando esta estrategia...</span>';
+
+  try {
+    const markets = [...(theme.activeMarkets || []), ...(theme.closedMarkets || [])];
+    const res = await fetch('/api/analyze-theme', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ theme: theme.theme, markets, trades: theme.trades || [] })
+    });
+    const data = await res.json();
+    if (data.analysis) {
+      contentDiv.innerHTML = `<div class="ai-analysis-text">${mdToHtml(data.analysis)}</div>`;
+      btn.textContent = '✓ Listo';
+      btn.dataset.analyzed = 'true';
+    } else {
+      contentDiv.innerHTML = `<span style="color:var(--red);font-family:var(--mono);font-size:12px">${data.error || 'Análisis fallido'}</span>`;
+      btn.textContent = 'Reintentar';
+      btn.disabled = false;
+    }
+  } catch (e) {
+    contentDiv.innerHTML = `<span style="color:var(--red);font-family:var(--mono);font-size:12px">Error: ${e.message}</span>`;
+    btn.textContent = 'Reintentar';
+    btn.disabled = false;
+  }
+}
+
+// ---- MARKET DETAIL MODAL ----
+function openMarketDetail(marketJson) {
+  const market = JSON.parse(marketJson);
+  const modal = $('marketModal');
+  const content = $('modalContent');
+
+  const pnl = market.profit ?? 0;
+  const pnlClass = pnl > 0 ? 'pnl-positive' : pnl < 0 ? 'pnl-negative' : '';
+  const pnlSign = pnl > 0 ? '+' : pnl < 0 ? '-' : '';
+  const price = market.avgPrice ?? 0;
+  const shares = parseFloat(market.size || 0);
+  const endDate = market.endDate ? new Date(market.endDate).toLocaleDateString('es-ES', {
+    month: 'long', day: 'numeric', year: 'numeric'
+  }) : '—';
+
+  const currentCost = shares * price;
+  const potentialReturn = shares;
+  const impliedOdds = price > 0 ? (1 / price).toFixed(2) : '—';
+
+  content.innerHTML = `
+    <div class="modal-market-title">${escHtml(market.title)}</div>
+
+    <div class="modal-chart-container">
+      <canvas id="modalChart" height="200"></canvas>
+    </div>
+
+    <div class="modal-details">
+      <div class="modal-detail">
+        <div class="modal-detail-val">${(price * 100).toFixed(1)}%</div>
+        <div class="modal-detail-lbl">Precio Medio de Entrada</div>
+      </div>
+      <div class="modal-detail">
+        <div class="modal-detail-val">${shares.toFixed(0)}</div>
+        <div class="modal-detail-lbl">Participaciones</div>
+      </div>
+      <div class="modal-detail">
+        <div class="modal-detail-val ${pnlClass}">${pnlSign}$${Math.abs(pnl).toFixed(2)}</div>
+        <div class="modal-detail-lbl">G/P No Realizado</div>
+      </div>
+    </div>
+
+    <div class="scenarios-section">
+      <div class="scenarios-title">📊 Escenarios de Pago</div>
+      <div class="scenario-row">
+        <span class="scenario-label">Si gana <strong>${escHtml(market.outcome || 'YES')}</strong></span>
+        <span class="scenario-value" style="color:var(--green)">+$${potentialReturn.toFixed(2)} (${((potentialReturn / currentCost - 1) * 100).toFixed(0)}% de retorno)</span>
+      </div>
+      <div class="scenario-row">
+        <span class="scenario-label">Si la posición pierde</span>
+        <span class="scenario-value" style="color:var(--red)">-$${currentCost.toFixed(2)}</span>
+      </div>
+      <div class="scenario-row">
+        <span class="scenario-label">Probabilidad implícita</span>
+        <span class="scenario-value" style="color:var(--accent)">${(price * 100).toFixed(1)}%</span>
+      </div>
+      <div class="scenario-row">
+        <span class="scenario-label">Cuota implícita</span>
+        <span class="scenario-value">${impliedOdds}x</span>
+      </div>
+      <div class="scenario-row">
+        <span class="scenario-label">Resuelve</span>
+        <span class="scenario-value" style="color:var(--text-dim)">${endDate}</span>
+      </div>
+    </div>
+  `;
+
+  modal.classList.remove('hidden');
+
+  const ctx = document.getElementById('modalChart');
+  if (ctx) {
+    if (chartInstances['modal']) chartInstances['modal'].destroy();
+    const labels = generateDateLabels(30);
+    const priceData = generateMockPriceSeries(price, 30);
+
+    chartInstances['modal'] = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels,
+        datasets: [{
+          label: market.outcome || 'YES',
+          data: priceData,
+          borderColor: '#00d4aa',
+          backgroundColor: 'rgba(0, 212, 170, 0.1)',
+          borderWidth: 2,
+          fill: true,
+          tension: 0.4,
+          pointRadius: 0,
+          pointHoverRadius: 4,
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: ctx => `${(ctx.raw * 100).toFixed(1)}%`
+            }
+          }
+        },
+        scales: {
+          x: {
+            ticks: { color: '#5a7a9a', font: { family: 'Space Mono', size: 10 }, maxTicksLimit: 6 },
+            grid: { color: '#1e2d3d' }
+          },
+          y: {
+            ticks: {
+              color: '#5a7a9a',
+              font: { family: 'Space Mono', size: 10 },
+              callback: v => `${(v * 100).toFixed(0)}%`
+            },
+            grid: { color: '#1e2d3d' },
+            min: 0, max: 1
+          }
+        }
+      }
+    });
+
+    if (market.conditionId) {
+      fetchAndUpdateChart(market.conditionId, market.outcome);
+    }
+  }
+}
+
+async function fetchAndUpdateChart(conditionId, outcome) {
+  try {
+    const res = await fetch(`/api/price-history?conditionId=${conditionId}`);
+    const data = await res.json();
+    if (data.history && data.history.length > 2) {
+      const chart = chartInstances['modal'];
+      if (!chart) return;
+      chart.data.labels = data.history.map(h =>
+        new Date(h.t * 1000).toLocaleDateString('es-ES', { month: 'short', day: 'numeric' })
+      );
+      chart.data.datasets[0].data = data.history.map(h => h.p);
+      chart.update();
+    }
+  } catch (e) {
+    // Mantener datos de muestra
+  }
+}
+
+function closeModal(e) {
+  if (e.target === $('marketModal')) closeModalDirect();
+}
+function closeModalDirect() {
+  $('marketModal').classList.add('hidden');
+  if (chartInstances['modal']) {
+    chartInstances['modal'].destroy();
+    delete chartInstances['modal'];
+  }
+}
+
+// ---- UTILITIES ----
+function generateDateLabels(n) {
+  const labels = [];
+  const now = new Date();
+  for (let i = n - 1; i >= 0; i--) {
+    const d = new Date(now);
+    d.setDate(d.getDate() - i);
+    labels.push(d.toLocaleDateString('es-ES', { month: 'short', day: 'numeric' }));
+  }
+  return labels;
+}
+
+function generateMockPriceSeries(endPrice, n) {
+  const data = [];
+  let price = 0.5 + (Math.random() - 0.5) * 0.3;
+  for (let i = 0; i < n; i++) {
+    price += (Math.random() - 0.48) * 0.03;
+    price = Math.max(0.02, Math.min(0.98, price));
+    if (i === n - 1) price = endPrice;
+    data.push(parseFloat(price.toFixed(3)));
+  }
+  return data;
+}
+
+function mdToHtml(text) {
+  // Escape HTML first, then convert markdown
+  let s = escHtml(text);
+  // #### / ### / ## headings
+  s = s.replace(/^#{1,4} (.+)$/gm, '<strong style="font-size:13px;display:block;margin-top:10px;color:var(--text-bright)">$1</strong>');
+  // **bold**
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  // *italic*
+  s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  // Blank lines → paragraph breaks
+  s = s.replace(/\n\n+/g, '<br><br>');
+  // Single newlines → space (avoid orphan line breaks mid-paragraph)
+  s = s.replace(/\n/g, ' ');
+  return s;
+}
+
+function escHtml(str) {
+  if (!str) return '';
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ---- ATAJO DE TECLADO ----
+$('walletInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') startAnalysis();
+});
+
+// Cerrar modal con Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') closeModalDirect();
+});
