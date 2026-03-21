@@ -13,21 +13,49 @@ load_dotenv()
 app = Flask(__name__)
 
 POLYMARKET_API = "https://data-api.polymarket.com"
+POLYMARKET_TOOLS_API = "https://activity.polymarket-tools.com"
 CLOB_API = "https://clob.polymarket.com"
 
 client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY", ""))
 
 
 def fetch_all_trades(wallet: str) -> tuple:
-    """Fetch complete activity via /activity, returning (trades, redeems).
-    Both are needed: trades for cost/proceeds, redeems for actual payouts on won positions.
+    """Fetch complete trade+redeem history.
+    Primary: activity.polymarket-tools.com (no offset cap, full history).
+    Fallback: data-api.polymarket.com (hard cap at 3500 records).
+    Returns (trades, redeems, source) where source is 'polymarket-tools' or 'data-api'.
     """
+    # ── Primary: polymarket-tools — full history, no cap ──
+    try:
+        resp = requests.post(
+            f"{POLYMARKET_TOOLS_API}/api/activity",
+            json={
+                "wallets": [wallet],
+                "filters": {
+                    "types": ["TRADE", "REDEEM"],
+                    "timeRange": "ALL_TIME",
+                    "sortDirection": "DESC",
+                },
+            },
+            headers={"Content-Type": "application/json"},
+            timeout=90,
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            activity = data.get("activity", [])
+            trades  = [r for r in activity if r.get("type") == "TRADE"]
+            redeems = [r for r in activity if r.get("type") == "REDEEM"]
+            if trades or redeems:
+                return trades, redeems, "polymarket-tools"
+    except Exception:
+        pass
+
+    # ── Fallback: data-api.polymarket.com (hard cap: offset 3000 = max 3500 records) ──
     all_trades = []
     all_redeems = []
     offset = 0
     limit = 500
-    max_pages = 100  # safety cap: 100 × 500 = 50 000 activity records max
-    for _ in range(max_pages):
+    for _ in range(7):
         resp = requests.get(
             f"{POLYMARKET_API}/activity",
             params={"user": wallet, "limit": limit, "offset": offset},
@@ -46,9 +74,9 @@ def fetch_all_trades(wallet: str) -> tuple:
             elif r.get("type") == "REDEEM":
                 all_redeems.append(r)
         if len(batch) < limit:
-            break          # last page — API exhausted
+            break
         offset += limit
-    return all_trades, all_redeems
+    return all_trades, all_redeems, "data-api"
 
 
 def fetch_positions(wallet: str) -> list:
@@ -422,7 +450,7 @@ def analyze():
         return jsonify({"error": "Wallet address required"}), 400
 
     try:
-        all_trades, all_redeems = fetch_all_trades(wallet)
+        all_trades, all_redeems, data_source = fetch_all_trades(wallet)
         open_positions = fetch_positions(wallet)
         closed_positions = reconstruct_closed_positions(all_trades, all_redeems, open_positions)
         all_positions = open_positions + closed_positions
@@ -436,6 +464,7 @@ def analyze():
             "wallet": wallet,
             "totalPositions": len(all_positions),
             "totalTrades": len(all_trades),
+            "dataSource": data_source,
             "themes": []
         }
 
