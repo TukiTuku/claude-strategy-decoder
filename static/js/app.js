@@ -353,6 +353,11 @@ function buildThemeCard(theme, markets, tab, idx) {
         </div>
       </div>
 
+      <div class="market-selection-bar">
+        <span class="market-selection-label">Selecciona los mercados a analizar</span>
+        <button class="btn-select-toggle" onclick="toggleAllMarkets(this, ${idx})">Ninguno</button>
+      </div>
+
       <div class="markets-grid" id="markets-grid-${idx}">
         ${markets.map(m => buildMarketCard(m, idx, tab)).join('')}
       </div>
@@ -407,8 +412,12 @@ function buildMarketCard(market, themeIdx, tab) {
   const roiClass = roiPct > 0 ? 'pnl-positive' : roiPct < 0 ? 'pnl-negative' : '';
   const roiSign = roiPct > 0 ? '+' : roiPct < 0 ? '-' : '';
 
+  const condId = escHtml(market.conditionId || market.title || '');
   return `
     <div class="market-card" data-market="${escHtml(JSON.stringify(market))}" onclick="openMarketDetail(this.dataset.market)">
+      <label class="market-checkbox-wrap" onclick="event.stopPropagation()">
+        <input type="checkbox" class="market-checkbox" data-condition-id="${condId}" checked>
+      </label>
       <div class="market-title">${escHtml(market.title)}</div>
       <div class="market-outcome">${escHtml(market.outcome || 'YES')}</div>
       <div class="market-stats">
@@ -444,9 +453,19 @@ function toggleCard(idx) {
   card.classList.toggle('open');
 }
 
+// ---- MARKET SELECTION TOGGLE ----
+function toggleAllMarkets(btn, themeIdx) {
+  const grid = $(`markets-grid-${themeIdx}`);
+  if (!grid) return;
+  const checkboxes = grid.querySelectorAll('.market-checkbox');
+  const allChecked = [...checkboxes].every(cb => cb.checked);
+  checkboxes.forEach(cb => { cb.checked = !allChecked; });
+  btn.textContent = allChecked ? 'Seleccionar todos' : 'Ninguno';
+}
+
 // ---- AI ANALYSIS ----
 async function runAIAnalysis(btn) {
-  if (btn.dataset.analyzed === 'true') return;
+  if (btn.disabled) return;
 
   const themeName = btn.dataset.theme;
   const theme = currentData.themes.find(t => t.theme === themeName);
@@ -460,11 +479,31 @@ async function runAIAnalysis(btn) {
   contentDiv.innerHTML = '<span class="ai-loading">Claude está analizando esta estrategia...</span>';
 
   try {
-    const markets = [...(theme.activeMarkets || []), ...(theme.closedMarkets || [])];
+    const grid = btn.closest('.theme-body').querySelector('[id^="markets-grid-"]');
+    const checkedBoxes = grid ? [...grid.querySelectorAll('.market-checkbox:checked')] : [];
+    const checkedIds = new Set(checkedBoxes.map(cb => cb.dataset.conditionId));
+
+    const allMarkets = [...(theme.activeMarkets || []), ...(theme.closedMarkets || [])];
+    const hasCheckboxes = grid && grid.querySelectorAll('.market-checkbox').length > 0;
+    const markets = hasCheckboxes
+      ? allMarkets.filter(m => checkedIds.has(m.conditionId || m.title || ''))
+      : allMarkets;
+
+    if (markets.length === 0) {
+      contentDiv.innerHTML = '<span style="font-family:var(--mono);font-size:12px;color:var(--yellow)">Selecciona al menos un mercado para analizar.</span>';
+      btn.textContent = 'Analizar';
+      btn.disabled = false;
+      return;
+    }
+
+    const trades = hasCheckboxes
+      ? (theme.trades || []).filter(t => !t.conditionId || checkedIds.has(t.conditionId))
+      : (theme.trades || []);
+
     const res = await fetch('/api/analyze-theme', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ theme: theme.theme, markets, trades: theme.trades || [] })
+      body: JSON.stringify({ theme: theme.theme, markets, trades })
     });
     const data = await res.json();
     if (data.analysis) {

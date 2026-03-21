@@ -564,6 +564,60 @@ body.light-mode .hero-grid-bg { opacity: 0.4; }
   padding: 20px;
   cursor: pointer;
   transition: background 0.2s;
+  position: relative;
+}
+
+.market-checkbox-wrap {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  cursor: pointer;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+}
+
+.market-checkbox {
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+
+.market-selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 0 10px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.market-selection-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.btn-select-toggle {
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 3px 9px;
+  border: 1px solid var(--border-bright);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-radius: 4px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  transition: border-color 0.15s, color 0.15s;
+}
+
+.btn-select-toggle:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .market-card:hover { background: var(--bg3); }
 .market-title {
