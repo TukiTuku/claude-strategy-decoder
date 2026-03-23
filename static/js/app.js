@@ -24,6 +24,7 @@ let pnlFilter = 'all';
 let chartInstances = {};
 let themesByIdx = {};
 let themeChartFilters = {};
+let simStates = {}; // idx → true when simulated mode is active
 
 // ---- FORMAT MONEY ----
 // Returns European-style: 1.456.543,40 (dot = thousands, comma = decimals)
@@ -385,6 +386,7 @@ function renderThemes(themes, tab) {
   chartInstances = {};
   themesByIdx = {};
   themeChartFilters = {};
+  simStates = {};
 
   const relevantThemes = themes.filter(t => {
     const markets = tab === 'active' ? t.activeMarkets : t.closedMarkets;
@@ -453,11 +455,11 @@ function buildThemeCard(theme, markets, tab, idx) {
       </div>
       <div class="theme-roi-row">
         <div class="roi-box">
-          <span class="roi-pct ${roiClass}">${pnlSign}$${formatMoney(roi.totalPnL)}</span>
-          <span class="roi-label">P&amp;L $</span>
+          <span class="roi-pct ${roiClass}" id="hdr-pnl-${idx}">${pnlSign}$${formatMoney(roi.totalPnL)}</span>
+          <span class="roi-label" id="hdr-pnl-lbl-${idx}">P&amp;L $</span>
         </div>
         <div class="roi-box">
-          <span class="roi-pct ${roiClass}">${roiSign}${Math.abs(roi.roiPercent)}%</span>
+          <span class="roi-pct ${roiClass}" id="hdr-roi-${idx}">${roiSign}${Math.abs(roi.roiPercent)}%</span>
           <span class="roi-label">ROI</span>
         </div>
         <span class="theme-chevron">▾</span>
@@ -467,9 +469,12 @@ function buildThemeCard(theme, markets, tab, idx) {
       <div class="ai-panel">
         <div class="ai-panel-header">
           <span class="ai-label">Análisis de Estrategia IA</span>
-          <button class="btn-ai-analyze" onclick="runAIAnalysis(this)" data-theme="${escHtml(theme.theme)}" data-analyzed="false">
-            Analizar
-          </button>
+          <div style="display:flex;gap:8px;align-items:center">
+            ${tab === 'closed' ? `<button class="btn-simulate" onclick="runSimulation(${idx})">+1¢ Sim</button>` : ''}
+            <button class="btn-ai-analyze" onclick="runAIAnalysis(this)" data-theme="${escHtml(theme.theme)}" data-analyzed="false">
+              Analizar
+            </button>
+          </div>
         </div>
         <div class="ai-content-${idx}">
           <span style="font-family:var(--mono);font-size:12px;color:var(--text-dim)">
@@ -520,6 +525,7 @@ function buildThemeCard(theme, markets, tab, idx) {
           <span class="roi-item-lbl">ROI</span>
         </div>
       </div>
+
     </div>
   `;
 
@@ -677,6 +683,69 @@ function toggleAllMarkets(btn, themeIdx) {
   const allChecked = [...checkboxes].every(cb => cb.checked);
   checkboxes.forEach(cb => { cb.checked = !allChecked; });
   btn.textContent = allChecked ? 'Seleccionar todos' : 'Ninguno';
+}
+
+// ---- +1¢ SIMULATION ----
+function runSimulation(idx) {
+  const theme = themesByIdx[idx];
+  if (!theme) return;
+
+  const btn      = document.querySelector(`#theme-${idx} .btn-simulate`);
+  const pnlSpan  = document.getElementById('hdr-pnl-' + idx);
+  const lblSpan  = document.getElementById('hdr-pnl-lbl-' + idx);
+  const roiSpan  = document.getElementById('hdr-roi-' + idx);
+  if (!pnlSpan || !lblSpan) return;
+
+  // Toggle off → restore real values
+  if (simStates[idx]) {
+    simStates[idx] = false;
+    const roi = theme.closedRoi || theme.roi;
+    const sign = roi.totalPnL >= 0 ? '+' : '-';
+    const cls  = roi.totalPnL > 0 ? 'roi-positive' : roi.totalPnL < 0 ? 'roi-negative' : 'roi-neutral';
+    pnlSpan.className = 'roi-pct ' + cls;
+    pnlSpan.textContent = sign + '$' + formatMoney(roi.totalPnL);
+    lblSpan.textContent = 'P&L $';
+    if (roiSpan) {
+      const rSign = roi.roiPercent >= 0 ? '+' : '-';
+      roiSpan.className = 'roi-pct ' + cls;
+      roiSpan.textContent = rSign + Math.abs(roi.roiPercent) + '%';
+    }
+    if (btn) btn.classList.remove('btn-simulate-active');
+    return;
+  }
+
+  // Calculate simulated totals
+  const closed = theme.closedMarkets || [];
+  let realTotal = 0;
+  let simTotal  = 0;
+  let totalInvested = 0;
+
+  for (const m of closed) {
+    const profit = parseFloat(m.profit ?? 0);
+    const shares = parseFloat(m.size   ?? 0);
+    const invested = parseFloat(m.initialValue || 0) || shares * parseFloat(m.avgPrice ?? 0);
+    realTotal    += profit;
+    totalInvested += invested;
+    if (profit > 0) {
+      simTotal += profit - shares * 0.01;   // paid 1¢ more → earns 1¢×shares less
+    } else {
+      simTotal += profit;                   // losers unchanged
+    }
+  }
+
+  const simRoiPct = totalInvested > 0 ? ((simTotal / totalInvested) * 100) : 0;
+  const sign  = simTotal >= 0 ? '+' : '-';
+  const sCls  = simTotal > 0 ? 'roi-positive' : simTotal < 0 ? 'roi-negative' : 'roi-neutral';
+
+  pnlSpan.className = 'roi-pct sim-active-val';
+  pnlSpan.textContent = sign + '$' + formatMoney(Math.abs(simTotal));
+  lblSpan.innerHTML = 'P&amp;L $ <span class="sim-badge">+1¢</span>';
+  if (roiSpan) {
+    roiSpan.className = 'roi-pct sim-active-val';
+    roiSpan.textContent = (simRoiPct >= 0 ? '+' : '') + simRoiPct.toFixed(2) + '%';
+  }
+  if (btn) btn.classList.add('btn-simulate-active');
+  simStates[idx] = true;
 }
 
 // ---- AI ANALYSIS ----

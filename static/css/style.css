@@ -528,6 +528,47 @@ body.light-mode .hero-grid-bg { opacity: 0.4; }
   transition: all 0.2s;
 }
 .btn-ai-analyze:hover { background: rgba(0, 212, 170, 0.2); }
+
+/* ---- +1¢ SIMULATION BUTTON ---- */
+.btn-simulate {
+  background: rgba(212, 98, 42, 0.12);
+  border: 1px solid rgba(212, 98, 42, 0.35);
+  color: var(--accent3);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  letter-spacing: 0.03em;
+  transition: all 0.2s;
+  white-space: nowrap;
+}
+.btn-simulate:hover { background: rgba(212, 98, 42, 0.25); }
+.btn-simulate-active {
+  background: rgba(212, 98, 42, 0.35) !important;
+  border-color: var(--accent3) !important;
+  box-shadow: 0 0 8px rgba(212, 98, 42, 0.4);
+}
+
+/* Simulated value shown in theme header */
+.sim-active-val {
+  color: var(--accent3) !important;
+}
+.sim-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  font-family: var(--mono);
+  background: rgba(212, 98, 42, 0.2);
+  color: var(--accent3);
+  border: 1px solid rgba(212, 98, 42, 0.4);
+  border-radius: 3px;
+  padding: 1px 4px;
+  vertical-align: middle;
+  margin-left: 4px;
+  letter-spacing: 0.04em;
+}
 .ai-analysis-text {
   font-size: 14px;
   line-height: 1.7;
