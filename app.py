@@ -147,7 +147,8 @@ def fetch_all_trades(wallet: str) -> tuple:
             trades  = [r for r in activity if r.get("type") == "TRADE"]
             redeems = [r for r in activity if r.get("type") == "REDEEM"]
             if trades or redeems:
-                return trades, redeems, "polymarket-tools"
+                tools_pnl = data.get("totalPnl")
+                return trades, redeems, "polymarket-tools", tools_pnl
     except Exception:
         pass
 
@@ -177,7 +178,7 @@ def fetch_all_trades(wallet: str) -> tuple:
         if len(batch) < limit:
             break
         offset += limit
-    return all_trades, all_redeems, "data-api"
+    return all_trades, all_redeems, "data-api", None
 
 
 def fetch_positions(wallet: str) -> list:
@@ -635,7 +636,7 @@ def analyze():
         return jsonify({"error": "Wallet address required"}), 400
 
     try:
-        all_trades, all_redeems, data_source = fetch_all_trades(wallet)
+        all_trades, all_redeems, data_source, tools_pnl = fetch_all_trades(wallet)
         open_positions = fetch_positions(wallet)
         closed_positions = reconstruct_closed_positions(all_trades, all_redeems, open_positions)
         all_positions = open_positions + closed_positions
@@ -650,6 +651,7 @@ def analyze():
             "totalPositions": len(all_positions),
             "totalTrades": len(all_trades),
             "dataSource": data_source,
+            "polymarketToolsPnl": tools_pnl,
             "themes": []
         }
 

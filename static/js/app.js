@@ -189,11 +189,27 @@ function renderPnlChart(themes) {
   const isPositive = finalValue >= 0;
   const lineColor  = isPositive ? '#00cc88' : '#ff4444';
   const bgColor    = isPositive ? 'rgba(0,204,136,0.08)' : 'rgba(255,68,68,0.08)';
-  const totalSign  = finalValue > 0 ? '+' : finalValue < 0 ? '-' : '';
+
+  // When showing "all" data and polymarket-tools provided a totalPnl, use it as the
+  // authoritative total — it covers the full wallet history including periods we can't
+  // reconstruct from the trade records we received.
+  const toolsPnl = (pnlFilter === 'all' && currentData && currentData.polymarketToolsPnl != null)
+    ? currentData.polymarketToolsPnl
+    : null;
+  const displayValue = toolsPnl !== null ? toolsPnl : finalValue;
+  const displayPositive = displayValue >= 0;
+  const totalSign = displayValue > 0 ? '+' : displayValue < 0 ? '-' : '';
 
   const totalEl = $('pnlTotalValue');
-  totalEl.textContent = `${totalSign}$${formatMoney(finalValue)}`;
-  totalEl.className = `pnl-total-val ${isPositive ? 'pnl-positive' : 'pnl-negative'}`;
+  totalEl.textContent = `${totalSign}$${formatMoney(displayValue)}`;
+  totalEl.className = `pnl-total-val ${displayPositive ? 'pnl-positive' : 'pnl-negative'}`;
+
+  const lblEl = $('pnlTotalLbl');
+  if (toolsPnl !== null) {
+    lblEl.textContent = 'P&L Total histórico (polymarket-tools)';
+  } else {
+    lblEl.textContent = 'Profit acumulado (posiciones cerradas)';
+  }
 
   const labels = points.map(p =>
     new Date(p.day + 'T12:00:00').toLocaleDateString('es-ES', { month: 'short', day: 'numeric' })
