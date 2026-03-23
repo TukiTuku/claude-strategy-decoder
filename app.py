@@ -2,6 +2,7 @@ from flask import Flask, render_template, jsonify, request
 import requests
 import anthropic
 import json
+import re
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -9,6 +10,106 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# ── Sport team → league lookup (built once at startup) ──────────────────────
+# Priority (last writer wins for ambiguous names):
+#   MLB → NHL → NCAA → NFL → NBA → Soccer
+# Longer names ("trail blazers", "paris saint-germain") are checked before
+# shorter ones so partial matches don't fire prematurely.
+_TEAM_LEAGUE: dict = {}
+
+for _t in [  # MLB
+    "angels", "astros", "athletics", "blue jays", "braves", "brewers", "cubs",
+    "diamondbacks", "dodgers", "guardians", "mariners", "marlins", "mets",
+    "nationals", "orioles", "padres", "phillies", "pirates", "rays", "red sox",
+    "rockies", "royals", "reds", "tigers", "twins", "white sox", "yankees",
+]:
+    _TEAM_LEAGUE[_t] = "MLB"
+
+for _t in [  # NHL
+    "avalanche", "blackhawks", "blue jackets", "blues", "bruins", "canadiens",
+    "canucks", "capitals", "coyotes", "devils", "ducks", "flyers", "flames",
+    "golden knights", "hurricanes", "islanders", "kraken", "lightning",
+    "maple leafs", "oilers", "penguins", "predators", "rangers", "red wings",
+    "sabres", "senators", "sharks", "stars", "wild",
+]:
+    _TEAM_LEAGUE[_t] = "NHL"
+
+for _t in [  # NCAA college teams
+    "alabama", "arkansas", "auburn", "baylor", "connecticut", "creighton",
+    "duke", "florida", "gonzaga", "houston", "illinois", "iowa", "kansas",
+    "kentucky", "marquette", "maryland", "michigan", "michigan state",
+    "missouri", "notre dame", "ohio state", "oklahoma", "oregon", "purdue",
+    "st johns", "tennessee", "texas", "tulsa", "uconn", "utah", "vanderbilt",
+    "virginia", "wisconsin", "xavier",
+]:
+    _TEAM_LEAGUE[_t] = "NCAA"
+
+for _t in [  # NFL
+    "49ers", "bears", "bengals", "bills", "broncos", "browns", "buccaneers",
+    "bucs", "cardinals", "chargers", "chiefs", "colts", "commanders", "cowboys",
+    "dolphins", "eagles", "falcons", "giants", "jaguars", "jets", "lions",
+    "packers", "panthers", "patriots", "raiders", "rams", "ravens", "saints",
+    "seahawks", "steelers", "texans", "titans", "vikings",
+]:
+    _TEAM_LEAGUE[_t] = "NFL"
+
+for _t in [  # NBA
+    "76ers", "sixers", "blazers", "bucks", "bulls", "cavaliers", "cavs",
+    "celtics", "clippers", "grizzlies", "hawks", "heat", "hornets", "jazz",
+    "kings", "knicks", "lakers", "magic", "mavericks", "mavs", "nets",
+    "nuggets", "pacers", "pelicans", "pistons", "raptors", "rockets", "spurs",
+    "suns", "thunder", "timberwolves", "trail blazers", "warriors", "wizards",
+    "wolves",
+]:
+    _TEAM_LEAGUE[_t] = "NBA"
+
+for _t in [  # Soccer — European football (highest priority, overwrites conflicts)
+    # Multi-word first (also ensures length-sort prefers them)
+    "paris saint-germain", "manchester united", "manchester city",
+    "atletico madrid", "inter milan", "aston villa", "west ham",
+    "man united", "man city", "real madrid", "psg",
+    # Single-word
+    "arsenal", "atletico", "ajax", "barcelona", "benfica", "brighton",
+    "celtic", "chelsea", "dortmund", "fiorentina", "juventus",
+    "lazio", "liverpool", "milan", "napoli", "newcastle",
+    "porto", "roma", "sevilla", "tottenham", "valencia",
+]:
+    _TEAM_LEAGUE[_t] = "Soccer"
+
+# Sort by descending length so multi-word names are tried first
+_TEAM_NAMES_SORTED: list = sorted(_TEAM_LEAGUE, key=len, reverse=True)
+
+# Keywords that signal an NBA betting market (used for "spurs" disambiguation)
+_NBA_BET_CTX: set = {"nba", "spread", "o/u", "over/under", "pts", "quarter", "halftime"}
+# Keywords that signal a European soccer market
+_SOCCER_CTX: set = {
+    "premier league", "epl", "champions league", "fa cup", "ucl",
+    "europa league", "ligue 1", "la liga", "serie a", "bundesliga",
+    "eredivisie", "primeira liga", "scottish", "carabao",
+}
+
+
+def _team_league(title_lower: str) -> str | None:
+    """Return the league name if any known team is found in the title, else None.
+
+    Handles context-sensitive disambiguation:
+    • "spurs"  → NBA (default) or Soccer (Tottenham) based on surrounding keywords.
+    """
+    # ── Disambiguation: "spurs" ───────────────────────────────────────────
+    if re.search(r'\bspurs\b', title_lower):
+        if any(kw in title_lower for kw in _SOCCER_CTX):
+            return "Soccer"
+        return "NBA"   # default: San Antonio Spurs
+
+    # ── General team lookup (longest names first) ─────────────────────────
+    for team in _TEAM_NAMES_SORTED:
+        if team == "spurs":
+            continue   # already handled above
+        if re.search(r'\b' + re.escape(team) + r'\b', title_lower):
+            return _TEAM_LEAGUE[team]
+    return None
+# ────────────────────────────────────────────────────────────────────────────
 
 app = Flask(__name__)
 
@@ -288,30 +389,109 @@ def group_by_theme(positions, trades):
 
 
 def extract_theme(title: str) -> str:
-    """Simple keyword-based theme extractor."""
+    """Keyword + team-name based theme extractor.
+
+    Step 1 — team-name lookup: scan title for any known NBA/NFL/NHL/MLB team
+             name and return its league immediately, regardless of title format.
+             This handles 'Spread: Pistons (-4.5)', 'Clippers O/U 224.5', etc.
+    Step 2 — league/topic keyword matching for everything else.
+    Step 3 — generic fallback (first 2 significant words).
+    """
     title_lower = title.lower()
 
+    # ── Step 0: explicit betting-line pattern (overrides team-name lookup) ────
+    # "Spread: Knicks (-4.5)", "O/U 2.5: Atletico vs River", "Over 224.5: ..."
+    if re.search(r'\b(spread|o/u|over/under)\b', title_lower) and re.search(r'\d', title_lower):
+        # Honour known sport leagues even for betting lines
+        league = _team_league(title_lower)
+        if league:
+            return league
+        return "Sports (Apuestas)"
+
+    # ── Step 1: team-name lookup ──────────────────────────────────────────────
+    league = _team_league(title_lower)
+    if league:
+        return league
+
+    # ── Step 2: keyword matching ──────────────────────────────────────────────
     keyword_themes = {
-        "Esports": ["counter-strike", "cs2", "csgo", "dota 2", "dota2", "valorant", "rocket league", "overwatch", "fortnite", "league of legends", "lol:", "esports", "esport", "starcraft"],
-        "Bitcoin & Crypto": ["bitcoin", "btc", "ethereum", "eth", "crypto", "solana", "sol", "bnb", "xrp", "doge", "fdv", "satoshi", "zcash", "defi", "nft", "airdrop", "memecoin"],
-        "Coleccionables": ["pokemon", "psa 10", "card sale", "wagner", "illustrator"],
-        "Entretenimiento": ["bruno mars", "taylor swift", "grammy", "oscar", "billboard"],
-        "Middle East Conflict": ["iran", "iranian", "israel", "israeli", "gaza", "hamas", "hezbollah", "lebanon", "lebanese", "irgc", "idf", "west bank", "occupied", "ceasefire", "hostage", "sinwar", "netanyahu"],
-        "Russia-Ukraine": ["russia", "ukraine", "putin", "zelensky", "nato", "kyiv", "moscow"],
-        "US Politics": ["trump", "biden", "harris", "republican", "democrat", "election", "congress", "senate", "president"],
-        "AI & Tech": ["openai", "gpt", "claude", "llm", "ai model", "chatgpt", "google", "microsoft", "apple", "nvidia", "semiconductor", "earnings call", "tesla", "meta"],
-        "Sports": ["nfl", "nba", "fifa", "world cup", "super bowl", "champions", "championship", "tournament"],
-        "Economy & Markets": ["fed", "interest rate", "inflation", "recession", "gdp", "unemployment", "stock", "nasdaq", "dow"],
-        "China & Taiwan": ["china", "taiwan", "xi jinping", "beijing", "taiwan strait"],
+        "Esports":           ["counter-strike", "cs2", "csgo", "dota 2", "dota2",
+                              "valorant", "rocket league", "overwatch", "fortnite",
+                              "league of legends", "lol:", "esports", "esport", "starcraft"],
+        "Bitcoin & Crypto":  ["bitcoin", "btc", "ethereum", "eth", "crypto", "solana",
+                              "sol", "bnb", "xrp", "doge", "fdv", "satoshi", "zcash",
+                              "defi", "nft", "airdrop", "memecoin"],
+        "Coleccionables":    ["pokemon", "psa 10", "card sale", "wagner", "illustrator"],
+        "Entretenimiento":   ["bruno mars", "taylor swift", "grammy", "oscar", "billboard"],
+        "Middle East Conflict": ["iran", "iranian", "israel", "israeli", "gaza", "hamas",
+                                 "hezbollah", "lebanon", "lebanese", "irgc", "idf",
+                                 "west bank", "ceasefire", "hostage", "sinwar", "netanyahu"],
+        "Russia-Ukraine":    ["russia", "ukraine", "putin", "zelensky", "nato", "kyiv", "moscow"],
+        "US Politics":       ["trump", "biden", "harris", "republican", "democrat",
+                              "election", "congress", "senate", "president"],
+        "AI & Tech":         ["openai", "gpt", "claude", "llm", "ai model", "chatgpt",
+                              "google", "microsoft", "apple", "nvidia", "semiconductor",
+                              "earnings call", "tesla", "meta"],
+        # League-level keywords catch titles without a specific team name
+        "NBA":               ["nba", "basketball"],
+        "NFL":               ["nfl", "super bowl", "touchdown", "nfc", "afc", "quarterback"],
+        "NHL":               ["nhl", "hockey", "stanley cup"],
+        "MLB":               ["mlb", "baseball", "world series", "home run"],
+        "NCAA":              ["ncaa", "march madness", "college basketball", "college football",
+                              "cfp", "bowl game", "sec championship", "big ten", "acc tournament",
+                              "pac-12", "big 12", "ncaa tournament", "final four",
+                              "college world series"],
+        "Soccer":            ["premier league", "champions league", "europa league", "fa cup",
+                              "bundesliga", "la liga", "serie a", "ligue 1", "eredivisie",
+                              "carabao cup", "epl", "ucl", "fifa", "world cup", "mls"],
+        # Boxeo BEFORE MMA so "boxing fight" / "boxing bout" hits "boxing" first
+        "Boxeo":             ["boxing", "wbc", "wba", "ibf", "wbo",
+                              "featherweight", "welterweight", "middleweight",
+                              "title fight", "championship bout", "prizefighter"],
+        "MMA & UFC":         ["ufc", "mma", "octagon", "bellator", "one championship",
+                              "submission", "fight night", "rear-naked",
+                              "knockout", "ko", "tko", "fight", "bout", "heavyweight bout",
+                              "heavyweight fight"],
+        "Sports":            ["formula 1", "f1", "grand prix",
+                              "tennis", "wimbledon", "us open", "french open", "australian open",
+                              "golf", "masters", "pga", "nascar", "olympics"],
+        "Economy & Markets": ["fed", "interest rate", "inflation", "recession", "gdp",
+                              "unemployment", "stock", "nasdaq", "dow"],
+        "China & Taiwan":    ["china", "taiwan", "xi jinping", "beijing", "taiwan strait"],
     }
 
-    for theme, keywords in keyword_themes.items():
-        if any(kw in title_lower for kw in keywords):
-            return theme
+    # Short tickers/abbreviations that need word-boundary matching to avoid
+    # substring collisions (e.g. "eth" inside "method", "dow" inside "sundowns")
+    _WORD_MATCH = {"eth", "sol", "bnb", "xrp", "fed", "gdp", "dow", "nft", "lol:", "ko", "tko"}
 
-    # Generic fallback: use first 3 significant words
-    words = [w for w in title.split() if len(w) > 3][:2]
-    return " ".join(words) if words else "Other"
+    for theme, keywords in keyword_themes.items():
+        for kw in keywords:
+            if kw in _WORD_MATCH:
+                if re.search(r'\b' + re.escape(kw) + r'\b', title_lower):
+                    return theme
+            elif kw in title_lower:
+                return theme
+
+    # ── Step 3: pattern-based fallback (never use title words as category name) ─
+    # Match / game titles with soccer-style context
+    _SOCCER_MATCH_CTX = {
+        "premier league", "liga", "serie a", "bundesliga", "ligue", "mls",
+        "copa", "cup", "fc", "united", "city", "atletico", "sporting",
+        "dynamo", "inter", "real", "club", "deportivo",
+    }
+    if re.search(r'\bvs\.?\b|\bvs\b', title_lower):
+        if any(kw in title_lower for kw in _SOCCER_MATCH_CTX):
+            return "Soccer"
+        return "Sports"
+
+    # Any remaining title that looks sport-adjacent
+    if any(kw in title_lower for kw in ["win", "draw", "beat", "match", "game",
+                                          "season", "championship", "tournament",
+                                          "playoff", "final", "score", "goal",
+                                          "league", "cup", "series"]):
+        return "Sports"
+
+    return "Other"
 
 
 def analyze_strategy_with_claude(theme: str, markets: dict, trades: list) -> str:
@@ -415,7 +595,7 @@ Responde ÚNICAMENTE con este JSON (sin markdown, sin texto extra):
         return f"{raw}\n\n" + "\n".join(scenario_lines)
 
 
-def compute_roi(markets: dict) -> dict:
+def compute_roi(markets: dict, active: bool = False) -> dict:
     total_invested = 0
     total_current = 0
     total_pnl = 0
@@ -424,7 +604,12 @@ def compute_roi(markets: dict) -> dict:
         invested = m["initialValue"] if m["initialValue"] else (m["size"] * m["avgPrice"])
         total_invested += invested
         total_current += m["currentValue"]
-        total_pnl += m["profit"]
+        if active:
+            # Unrealized P&L: current market value minus what was paid
+            total_pnl += m["currentValue"] - invested
+        else:
+            # Realized P&L: already computed from trades/redeems
+            total_pnl += m["profit"]
 
     roi_pct = ((total_pnl / total_invested) * 100) if total_invested > 0 else 0
 
@@ -481,14 +666,17 @@ def analyze():
             active_count += len(active_markets)
             closed_count += len(closed_markets)
 
-            roi = compute_roi(markets)
+            active_roi = compute_roi(active_markets, active=True)
+            closed_roi = compute_roi(closed_markets, active=False)
 
             theme_obj = {
                 "theme": theme,
                 "activeMarkets": list(active_markets.values()),
                 "closedMarkets": list(closed_markets.values()),
                 "tradeCount": len(theme_trades),
-                "roi": roi,
+                "roi": active_roi,       # kept for backwards compat
+                "activeRoi": active_roi,
+                "closedRoi": closed_roi,
                 "analysis": None,
                 "trades": [
                     {

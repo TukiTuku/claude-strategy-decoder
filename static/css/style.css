@@ -857,6 +857,53 @@ body.light-mode .hero-grid-bg { opacity: 0.4; }
 .scenario-label { color: var(--text); }
 .scenario-value { font-family: var(--mono); font-weight: 700; }
 
+/* THEME PNL MINI CHART */
+.theme-pnl-section {
+  border-top: 1px solid var(--border);
+  padding: 16px 24px;
+}
+.theme-pnl-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.theme-pnl-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.theme-pnl-filters {
+  display: flex;
+  gap: 4px;
+}
+.theme-pnl-filter-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s, background 0.15s;
+}
+.theme-pnl-filter-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.theme-pnl-filter-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: rgba(45, 212, 170, 0.1);
+}
+.theme-pnl-canvas-wrap {
+  height: 110px;
+  position: relative;
+}
+
 /* UTILITIES */
 .hidden { display: none !important; }
 

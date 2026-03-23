@@ -22,6 +22,17 @@ let currentTab = 'active';
 let currentSort = 'default';
 let pnlFilter = 'all';
 let chartInstances = {};
+let themesByIdx = {};
+let themeChartFilters = {};
+
+// ---- FORMAT MONEY ----
+// Returns European-style: 1.456.543,40 (dot = thousands, comma = decimals)
+function formatMoney(amount, decimals = 2) {
+  const abs = Math.abs(amount);
+  const parts = abs.toFixed(decimals).split('.');
+  parts[0] = parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  return decimals > 0 ? parts.join(',') : parts[0];
+}
 
 // ---- UI HELPERS ----
 function $(id) { return document.getElementById(id); }
@@ -180,7 +191,7 @@ function renderPnlChart(themes) {
   const totalSign  = finalValue > 0 ? '+' : finalValue < 0 ? '-' : '';
 
   const totalEl = $('pnlTotalValue');
-  totalEl.textContent = `${totalSign}$${Math.abs(finalValue).toFixed(2)}`;
+  totalEl.textContent = `${totalSign}$${formatMoney(finalValue)}`;
   totalEl.className = `pnl-total-val ${isPositive ? 'pnl-positive' : 'pnl-negative'}`;
 
   const labels = points.map(p =>
@@ -215,7 +226,7 @@ function renderPnlChart(themes) {
           callbacks: {
             label: ctx => {
               const v = ctx.raw;
-              return ` ${v >= 0 ? '+' : ''}$${v.toFixed(2)}`;
+              return ` ${v >= 0 ? '+' : '-'}$${formatMoney(v)}`;
             }
           }
         }
@@ -229,7 +240,117 @@ function renderPnlChart(themes) {
           ticks: {
             color: '#5a7a9a',
             font: { family: 'Space Mono', size: 10 },
-            callback: v => `$${v.toFixed(0)}`
+            callback: v => `$${formatMoney(v, 0)}`
+          },
+          grid: { color: '#1e2d3d' }
+        }
+      }
+    }
+  });
+}
+
+// ---- PER-THEME PNL CHART ----
+function setThemePnlFilter(idx, filter, btn) {
+  themeChartFilters[idx] = filter;
+  const filtersEl = $(`theme-pnl-filters-${idx}`);
+  if (filtersEl) filtersEl.querySelectorAll('.theme-pnl-filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  renderThemePnlChart(idx);
+}
+
+function renderThemePnlChart(idx) {
+  const theme = themesByIdx[idx];
+  if (!theme) return;
+
+  const section = $(`theme-pnl-section-${idx}`);
+  if (!section) return;
+
+  const closedMarkets = theme.closedMarkets || [];
+  const byDay = {};
+  closedMarkets.forEach(m => {
+    if (!m.lastTradeDate) return;
+    const day = new Date(m.lastTradeDate * 1000).toISOString().slice(0, 10);
+    byDay[day] = (byDay[day] || 0) + (m.profit ?? 0);
+  });
+  const allDeltas = Object.keys(byDay).sort().map(day => ({ day, delta: byDay[day] }));
+
+  if (!allDeltas.length) { section.classList.add('hidden'); return; }
+  section.classList.remove('hidden');
+
+  const filter = themeChartFilters[idx] || 'all';
+  let filtered = allDeltas;
+  if (filter !== 'all') {
+    const days = filter === '7d' ? 7 : filter === '14d' ? 14 : 30;
+    const cutoff = new Date();
+    cutoff.setDate(cutoff.getDate() - days);
+    const cutoffStr = cutoff.toISOString().slice(0, 10);
+    filtered = allDeltas.filter(p => p.day >= cutoffStr);
+  }
+
+  let running = 0;
+  const points = filtered.map(p => {
+    running += p.delta;
+    return { day: p.day, value: parseFloat(running.toFixed(2)) };
+  });
+
+  if (!points.length) { section.classList.add('hidden'); return; }
+
+  const finalValue = points[points.length - 1].value;
+  const isPositive = finalValue >= 0;
+  const lineColor = isPositive ? '#00cc88' : '#ff4444';
+  const bgColor   = isPositive ? 'rgba(0,204,136,0.08)' : 'rgba(255,68,68,0.08)';
+
+  const labels = points.map(p =>
+    new Date(p.day + 'T12:00:00').toLocaleDateString('es-ES', { month: 'short', day: 'numeric' })
+  );
+  const values = points.map(p => p.value);
+
+  const chartKey = `theme-pnl-${idx}`;
+  if (chartInstances[chartKey]) { chartInstances[chartKey].destroy(); delete chartInstances[chartKey]; }
+
+  const canvas = $(`theme-pnl-${idx}`);
+  if (!canvas) return;
+
+  chartInstances[chartKey] = new Chart(canvas, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        borderColor: lineColor,
+        backgroundColor: bgColor,
+        borderWidth: 2,
+        fill: true,
+        tension: 0.3,
+        pointRadius: points.length > 30 ? 0 : 3,
+        pointHoverRadius: 5,
+        pointBackgroundColor: lineColor,
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const v = ctx.raw;
+              return ` ${v >= 0 ? '+' : '-'}$${formatMoney(v)}`;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: '#5a7a9a', font: { family: 'Space Mono', size: 9 }, maxTicksLimit: 6 },
+          grid: { color: '#1e2d3d' }
+        },
+        y: {
+          ticks: {
+            color: '#5a7a9a',
+            font: { family: 'Space Mono', size: 9 },
+            callback: v => `$${formatMoney(v, 0)}`
           },
           grid: { color: '#1e2d3d' }
         }
@@ -262,6 +383,8 @@ function renderThemes(themes, tab) {
 
   Object.values(chartInstances).forEach(c => c.destroy());
   chartInstances = {};
+  themesByIdx = {};
+  themeChartFilters = {};
 
   const relevantThemes = themes.filter(t => {
     const markets = tab === 'active' ? t.activeMarkets : t.closedMarkets;
@@ -301,6 +424,8 @@ function renderThemes(themes, tab) {
   }
 
   sorted.forEach((theme, idx) => {
+    themesByIdx[idx] = theme;
+    themeChartFilters[idx] = 'all';
     const markets = tab === 'active' ? theme.activeMarkets : theme.closedMarkets;
     const card = buildThemeCard(theme, markets, tab, idx);
     container.appendChild(card);
@@ -312,7 +437,7 @@ function buildThemeCard(theme, markets, tab, idx) {
   card.className = 'theme-card';
   card.id = `theme-${idx}`;
 
-  const roi = theme.roi;
+  const roi = tab === 'active' ? (theme.activeRoi || theme.roi) : (theme.closedRoi || theme.roi);
   const roiClass = roi.roiPercent > 0 ? 'roi-positive' : roi.roiPercent < 0 ? 'roi-negative' : 'roi-neutral';
   const roiSign = roi.roiPercent > 0 ? '+' : roi.roiPercent < 0 ? '-' : '';
   const pnlSign = roi.totalPnL > 0 ? '+' : roi.totalPnL < 0 ? '-' : '';
@@ -328,7 +453,7 @@ function buildThemeCard(theme, markets, tab, idx) {
       </div>
       <div class="theme-roi-row">
         <div class="roi-box">
-          <span class="roi-pct ${roiClass}">${pnlSign}$${Math.abs(roi.totalPnL).toFixed(2)}</span>
+          <span class="roi-pct ${roiClass}">${pnlSign}$${formatMoney(roi.totalPnL)}</span>
           <span class="roi-label">P&amp;L $</span>
         </div>
         <div class="roi-box">
@@ -353,6 +478,21 @@ function buildThemeCard(theme, markets, tab, idx) {
         </div>
       </div>
 
+      <div class="theme-pnl-section" id="theme-pnl-section-${idx}">
+        <div class="theme-pnl-header">
+          <span class="theme-pnl-label">Profit acumulado (cerradas)</span>
+          <div class="theme-pnl-filters" id="theme-pnl-filters-${idx}">
+            <button class="theme-pnl-filter-btn" onclick="setThemePnlFilter(${idx},'7d',this)">7D</button>
+            <button class="theme-pnl-filter-btn" onclick="setThemePnlFilter(${idx},'14d',this)">14D</button>
+            <button class="theme-pnl-filter-btn" onclick="setThemePnlFilter(${idx},'1m',this)">1M</button>
+            <button class="theme-pnl-filter-btn active" onclick="setThemePnlFilter(${idx},'all',this)">Todo</button>
+          </div>
+        </div>
+        <div class="theme-pnl-canvas-wrap">
+          <canvas id="theme-pnl-${idx}" height="110"></canvas>
+        </div>
+      </div>
+
       <div class="market-selection-bar">
         <span class="market-selection-label">Selecciona los mercados a analizar</span>
         <button class="btn-select-toggle" onclick="toggleAllMarkets(this, ${idx})">Ninguno</button>
@@ -364,15 +504,15 @@ function buildThemeCard(theme, markets, tab, idx) {
 
       <div class="roi-strip">
         <div class="roi-item">
-          <span class="roi-item-val" style="color:var(--text-dim)">$${roi.totalInvested.toFixed(2)}</span>
-          <span class="roi-item-lbl">Invertido</span>
+          <span class="roi-item-val" style="color:var(--text-dim)">$${formatMoney(roi.totalInvested)}</span>
+          <span class="roi-item-lbl">Total Invertido</span>
         </div>
         <div class="roi-item">
-          <span class="roi-item-val" style="color:var(--accent2)">$${roi.totalCurrent.toFixed(2)}</span>
+          <span class="roi-item-val" style="color:var(--accent2)">$${formatMoney(roi.totalCurrent)}</span>
           <span class="roi-item-lbl">Valor Actual</span>
         </div>
         <div class="roi-item">
-          <span class="roi-item-val ${roiClass}">${roiSign}$${Math.abs(roi.totalPnL).toFixed(2)}</span>
+          <span class="roi-item-val ${roiClass}">${roiSign}$${formatMoney(roi.totalPnL)}</span>
           <span class="roi-item-lbl">G/P</span>
         </div>
         <div class="roi-item">
@@ -426,18 +566,18 @@ function buildMarketCard(market, themeIdx, tab) {
           <span class="mstat-lbl">Precio Medio</span>
         </div>
         <div class="mstat">
-          <span class="mstat-val">${parseFloat(market.size || 0).toFixed(0)}</span>
-          <span class="mstat-lbl">Participaciones</span>
+          <span class="mstat-val" style="color:var(--text-dim)">$${formatMoney(parseFloat(market.initialValue || 0) || parseFloat(market.size || 0) * parseFloat(market.avgPrice || 0))}</span>
+          <span class="mstat-lbl">Invertido</span>
         </div>
         <div class="mstat">
-          <span class="mstat-val ${pnlClass}">${pnlSign}$${Math.abs(pnl).toFixed(2)}</span>
+          <span class="mstat-val ${pnlClass}">${pnlSign}$${formatMoney(pnl)}</span>
           <span class="mstat-lbl">G/P</span>
         </div>
         <div class="mstat">
           ${isHistory
             ? `<span class="mstat-val ${roiClass}">${roiSign}${Math.abs(roiPct).toFixed(1)}%</span>
-               <span style="font-family:var(--mono);font-size:13px;font-weight:700;color:${roiPct > 0 ? 'var(--green)' : roiPct < 0 ? 'var(--red)' : 'var(--text-dim)'}">${roiSign}$${Math.abs(pnl).toFixed(2)}</span>`
-            : `<span class="mstat-val">$${parseFloat(market.currentValue || 0).toFixed(2)}</span>
+               <span style="font-family:var(--mono);font-size:13px;font-weight:700;color:${roiPct > 0 ? 'var(--green)' : roiPct < 0 ? 'var(--red)' : 'var(--text-dim)'}">${roiSign}$${formatMoney(pnl)}</span>`
+            : `<span class="mstat-val">$${formatMoney(parseFloat(market.currentValue || 0))}</span>
                <span class="mstat-lbl">Valor Actual</span>`
           }
         </div>
@@ -519,6 +659,9 @@ function buildMarketsGridHtml(markets, themeIdx, tab) {
 function toggleCard(idx) {
   const card = $(`theme-${idx}`);
   card.classList.toggle('open');
+  if (card.classList.contains('open')) {
+    setTimeout(() => renderThemePnlChart(idx), 50);
+  }
 }
 
 // ---- SUBGROUP TOGGLE ----
@@ -631,7 +774,7 @@ function openMarketDetail(marketJson) {
         <div class="modal-detail-lbl">Participaciones</div>
       </div>
       <div class="modal-detail">
-        <div class="modal-detail-val ${pnlClass}">${pnlSign}$${Math.abs(pnl).toFixed(2)}</div>
+        <div class="modal-detail-val ${pnlClass}">${pnlSign}$${formatMoney(pnl)}</div>
         <div class="modal-detail-lbl">G/P No Realizado</div>
       </div>
     </div>
@@ -640,11 +783,11 @@ function openMarketDetail(marketJson) {
       <div class="scenarios-title">📊 Escenarios de Pago</div>
       <div class="scenario-row">
         <span class="scenario-label">Si gana <strong>${escHtml(market.outcome || 'YES')}</strong></span>
-        <span class="scenario-value" style="color:var(--green)">+$${potentialReturn.toFixed(2)} (${((potentialReturn / currentCost - 1) * 100).toFixed(0)}% de retorno)</span>
+        <span class="scenario-value" style="color:var(--green)">+$${formatMoney(potentialReturn)} (${((potentialReturn / currentCost - 1) * 100).toFixed(0)}% de retorno)</span>
       </div>
       <div class="scenario-row">
         <span class="scenario-label">Si la posición pierde</span>
-        <span class="scenario-value" style="color:var(--red)">-$${currentCost.toFixed(2)}</span>
+        <span class="scenario-value" style="color:var(--red)">-$${formatMoney(currentCost)}</span>
       </div>
       <div class="scenario-row">
         <span class="scenario-label">Probabilidad implícita</span>
