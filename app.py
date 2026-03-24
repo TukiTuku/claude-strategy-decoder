@@ -446,6 +446,12 @@ def extract_theme(title: str) -> str:
 
     # ── Step 2: keyword matching ──────────────────────────────────────────────
     keyword_themes = {
+        "Elon Musk & Twitter": ["elon musk", "elon", "musk", "tweet", "twitter", "x.com",
+                                "tesla ceo", "spacex"],
+        "Clima & Tiempo":    ["temperature", "highest temp", "lowest temp", "weather",
+                              "rainfall", "snowfall", "degrees celsius", "degrees fahrenheit",
+                              "°c", "°f", "humidity", "snow", "heat wave", "cold snap",
+                              "forecast"],
         "Esports":           ["counter-strike", "cs2", "csgo", "dota 2", "dota2",
                               "valorant", "rocket league", "overwatch", "fortnite",
                               "league of legends", "lol:", "esports", "esport", "starcraft"],
@@ -453,7 +459,9 @@ def extract_theme(title: str) -> str:
                               "sol", "bnb", "xrp", "doge", "fdv", "satoshi", "zcash",
                               "defi", "nft", "airdrop", "memecoin"],
         "Coleccionables":    ["pokemon", "psa 10", "card sale", "wagner", "illustrator"],
-        "Entretenimiento":   ["bruno mars", "taylor swift", "grammy", "oscar", "billboard"],
+        "Entretenimiento":   ["bruno mars", "taylor swift", "grammy", "oscar", "billboard",
+                              "celebrity", "kardashian", "beyonce", "followers",
+                              "subscribers", "views", "viral"],
         "Middle East Conflict": ["iran", "iranian", "israel", "israeli", "gaza", "hamas",
                                  "hezbollah", "lebanon", "lebanese", "irgc", "idf",
                                  "west bank", "ceasefire", "hostage", "sinwar", "netanyahu"],
@@ -493,7 +501,8 @@ def extract_theme(title: str) -> str:
 
     # Short tickers/abbreviations that need word-boundary matching to avoid
     # substring collisions (e.g. "eth" inside "method", "dow" inside "sundowns")
-    _WORD_MATCH = {"eth", "sol", "bnb", "xrp", "fed", "gdp", "dow", "nft", "lol:", "ko", "tko"}
+    _WORD_MATCH = {"eth", "sol", "bnb", "xrp", "fed", "gdp", "dow", "nft", "lol:", "ko", "tko",
+                   "snow", "elon", "musk", "tweet"}
 
     for theme, keywords in keyword_themes.items():
         for kw in keywords:
