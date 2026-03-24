@@ -14,7 +14,16 @@
       "Bash(pip install:*)",
       "Bash(curl -s http://localhost:5000/)",
       "Bash(taskkill:*)",
-      "Bash(powershell -Command \"Stop-Process -Name python -Force -ErrorAction SilentlyContinue; Write-Host 'Killed'\")"
+      "Bash(powershell -Command \"Stop-Process -Name python -Force -ErrorAction SilentlyContinue; Write-Host 'Killed'\")",
+      "Bash(powershell -Command \"Stop-Process -Name python -Force -ErrorAction SilentlyContinue\")",
+      "Bash(py:*)",
+      "Bash(pkill -f \"python app.py\")",
+      "Bash(curl -s \"https://data-api.polymarket.com/positions?user=0x93abbc022ce98d6f45d4444b594791cc4b7a9723&limit=500\")",
+      "Bash(python3 -c \":*)",
+      "Bash(curl:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)"
     ]
   }
 }

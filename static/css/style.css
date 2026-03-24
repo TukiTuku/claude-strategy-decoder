@@ -792,6 +792,45 @@ body.light-mode .hero-grid-bg { opacity: 0.4; }
 }
 .roi-item-lbl { font-size: 10px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.08em; }
 
+/* PARTIAL DATA NOTE */
+.partial-data-note {
+  margin: 0;
+  padding: 6px 24px 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-style: italic;
+  background: var(--bg3);
+}
+
+/* CATEGORIES TOTAL ROW */
+.categories-total-row {
+  margin-top: 24px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg2);
+  padding: 20px 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.cat-total-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.cat-total-lbl {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+.cat-total-val {
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 700;
+}
+
 /* EMPTY STATE */
 .empty-state {
   padding: 60px 24px;

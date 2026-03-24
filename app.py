@@ -237,6 +237,29 @@ def _usdc(record: dict) -> float:
     return float(record.get("size", 0)) * float(record.get("price", 0))
 
 
+def _deduplicate_activity(records: list) -> list:
+    """Remove duplicate records (same txHash + conditionId + type).
+    When duplicates exist, keep the one with the highest usdcSize."""
+    seen: dict = {}
+    result: list = []
+    for r in records:
+        key = (r.get("transactionHash"), r.get("conditionId"), r.get("type"))
+        if None in key:
+            result.append(r)
+            continue
+        existing_idx = seen.get(key)
+        if existing_idx is None:
+            seen[key] = len(result)
+            result.append(r)
+        else:
+            # Keep whichever has the larger usdcSize
+            existing_usdc = float(result[existing_idx].get("usdcSize") or 0)
+            new_usdc = float(r.get("usdcSize") or 0)
+            if new_usdc > existing_usdc:
+                result[existing_idx] = r
+    return result
+
+
 def reconstruct_closed_positions(all_trades: list, all_redeems: list, open_positions: list) -> list:
     """Build closed-position records using TRADE + REDEEM activity.
 
@@ -246,7 +269,14 @@ def reconstruct_closed_positions(all_trades: list, all_redeems: list, open_posit
 
     CLOB resolution is only used as fallback for markets that have remaining
     shares but zero REDEEM records (edge case: position not yet redeemed).
+
+    Note: polymarket-tools totalPnl uses a different internal formula.
+    Per-category P&L is a cashflow approximation and will show as partial data.
     """
+    # Deduplicate before processing (API sometimes returns duplicate tx records)
+    all_trades  = _deduplicate_activity(all_trades)
+    all_redeems = _deduplicate_activity(all_redeems)
+
     open_ids = {p.get("conditionId") for p in open_positions}
 
     by_market_trades: dict = defaultdict(list)

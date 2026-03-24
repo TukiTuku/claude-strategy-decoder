@@ -186,9 +186,6 @@ function renderPnlChart(themes) {
   });
 
   const finalValue = points.length ? points[points.length - 1].value : 0;
-  const isPositive = finalValue >= 0;
-  const lineColor  = isPositive ? '#00cc88' : '#ff4444';
-  const bgColor    = isPositive ? 'rgba(0,204,136,0.08)' : 'rgba(255,68,68,0.08)';
 
   // When showing "all" data and polymarket-tools provided a totalPnl, use it as the
   // authoritative total — it covers the full wallet history including periods we can't
@@ -198,6 +195,10 @@ function renderPnlChart(themes) {
     : null;
   const displayValue = toolsPnl !== null ? toolsPnl : finalValue;
   const displayPositive = displayValue >= 0;
+  // Chart line color follows the authoritative sign (polymarket-tools when available)
+  const isPositive = displayPositive;
+  const lineColor  = isPositive ? '#00cc88' : '#ff4444';
+  const bgColor    = isPositive ? 'rgba(0,204,136,0.08)' : 'rgba(255,68,68,0.08)';
   const totalSign = displayValue > 0 ? '+' : displayValue < 0 ? '-' : '';
 
   const totalEl = $('pnlTotalValue');
@@ -429,17 +430,21 @@ function renderThemes(themes, tab) {
   `;
   container.appendChild(sortBar);
 
-  // Apply sort
+  // Apply sort — use the same roi source that the card uses for the current tab
+  const getSortRoi = (theme) => tab === 'active' ? (theme.activeRoi || theme.roi) : (theme.closedRoi || theme.roi);
+  const getPnl = (theme) => { const r = getSortRoi(theme); return (r && r.totalPnL != null) ? r.totalPnL : 0; };
+  const getRoi = (theme) => { const r = getSortRoi(theme); return (r && r.roiPercent != null) ? r.roiPercent : 0; };
   let sorted = [...relevantThemes];
   if (currentSort === 'roi-desc') {
-    sorted.sort((a, b) => b.roi.roiPercent - a.roi.roiPercent);
+    sorted.sort((a, b) => getRoi(b) - getRoi(a));
   } else if (currentSort === 'roi-asc') {
-    sorted.sort((a, b) => a.roi.roiPercent - b.roi.roiPercent);
+    sorted.sort((a, b) => getRoi(a) - getRoi(b));
   } else if (currentSort === 'pnl-desc') {
-    sorted.sort((a, b) => b.roi.totalPnL - a.roi.totalPnL);
+    sorted.sort((a, b) => getPnl(b) - getPnl(a));
   } else if (currentSort === 'pnl-asc') {
-    sorted.sort((a, b) => a.roi.totalPnL - b.roi.totalPnL);
+    sorted.sort((a, b) => getPnl(a) - getPnl(b));
   }
+  console.log('[sort]', currentSort, tab, sorted.map(t => ({ theme: t.theme, pnl: getPnl(t) })));
 
   sorted.forEach((theme, idx) => {
     themesByIdx[idx] = theme;
@@ -448,6 +453,36 @@ function renderThemes(themes, tab) {
     const card = buildThemeCard(theme, markets, tab, idx);
     container.appendChild(card);
   });
+
+  // Total row — only for closed/historial tab
+  if (tab === 'closed') {
+    const catTotal = sorted.reduce((sum, t) => sum + getPnl(t), 0);
+    const globalPnl = (currentData && currentData.polymarketToolsPnl != null) ? currentData.polymarketToolsPnl : null;
+    const diff = globalPnl !== null ? catTotal - globalPnl : null;
+    const pctDiff = (globalPnl !== null && globalPnl !== 0) ? Math.abs(diff / globalPnl) * 100 : null;
+    const diffOk = pctDiff !== null && pctDiff < 5;
+
+    const fmtSigned = (v) => (v >= 0 ? '+' : '-') + '$' + formatMoney(v);
+
+    const totalRow = document.createElement('div');
+    totalRow.className = 'categories-total-row';
+    totalRow.innerHTML = `
+      <div class="cat-total-line">
+        <span class="cat-total-lbl">TOTAL CATEGORÍAS</span>
+        <span class="cat-total-val ${catTotal >= 0 ? 'roi-positive' : 'roi-negative'}">${fmtSigned(catTotal)}</span>
+      </div>
+      ${globalPnl !== null ? `
+      <div class="cat-total-line">
+        <span class="cat-total-lbl">P&amp;L GLOBAL (polymarket-tools)</span>
+        <span class="cat-total-val ${globalPnl >= 0 ? 'roi-positive' : 'roi-negative'}">${fmtSigned(globalPnl)}</span>
+      </div>
+      <div class="cat-total-line">
+        <span class="cat-total-lbl">DIFERENCIA</span>
+        <span class="cat-total-val ${diffOk ? 'roi-positive' : 'roi-negative'}">${fmtSigned(diff)} (${pctDiff.toFixed(1)}%)</span>
+      </div>` : ''}
+    `;
+    container.appendChild(totalRow);
+  }
 }
 
 function buildThemeCard(theme, markets, tab, idx) {
@@ -541,6 +576,7 @@ function buildThemeCard(theme, markets, tab, idx) {
           <span class="roi-item-lbl">ROI</span>
         </div>
       </div>
+      ${tab === 'closed' ? `<p class="partial-data-note">* datos parciales — el P&amp;L por categoría se calcula con los registros disponibles y puede no coincidir con el total global</p>` : ''}
 
     </div>
   `;
